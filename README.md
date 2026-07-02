@@ -4,6 +4,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![GUI](https://img.shields.io/badge/GUI-Tkinter-FFD43B)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A small desktop app (Tkinter) that lets you browse PDFs by topic.
 
@@ -119,3 +120,7 @@ Page numbers are **1-based** (page 1 = the first page).
 
 Arrow, space, and page keys defer to the PDF/topic lists while one of them has
 keyboard focus, so you can still navigate the lists with the keyboard.
+
+## License
+
+Released under the [MIT License](LICENSE).
