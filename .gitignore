@@ -5,7 +5,6 @@ __pycache__/
 # PyInstaller / build outputs
 build/
 dist/
-installer/
 
 # Local editor / tool settings
 .claude/
