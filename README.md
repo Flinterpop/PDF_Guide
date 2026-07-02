@@ -1,6 +1,6 @@
-# PDF Guide
+# PDF Sherpa
 
-[![GitHub repo](https://img.shields.io/badge/GitHub-Flinterpop%2FPDF__Guide-181717?logo=github)](https://github.com/Flinterpop/PDF_Guide)
+[![GitHub repo](https://img.shields.io/badge/GitHub-Flinterpop%2FPDF__Sherpa-181717?logo=github)](https://github.com/Flinterpop/PDF_Sherpa)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![GUI](https://img.shields.io/badge/GUI-Tkinter-FFD43B)
@@ -37,11 +37,11 @@ You can also switch folders at runtime with the **Choose folder…** button.
 Build the one-file exe, then compile the installer:
 
 ```
-python -m PyInstaller PDFGuide.spec        # -> dist\PDFGuide.exe
-iscc installer.iss                         # -> installer\PDFGuide-Setup.exe
+python -m PyInstaller PDFSherpa.spec       # -> dist\PDFSherpa.exe
+iscc installer.iss                         # -> installer\PDFSherpa-Setup.exe
 ```
 
-`PDFGuide-Setup.exe` is a per-user installer (no admin rights needed): it
+`PDFSherpa-Setup.exe` is a per-user installer (no admin rights needed): it
 installs the app, adds Start-Menu (and optional desktop) shortcuts, and
 registers an uninstaller. Point the app at your own PDF folder with
 **Choose folder…** after installing.

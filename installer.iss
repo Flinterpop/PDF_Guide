@@ -1,10 +1,10 @@
-; Inno Setup script for PDF Guide
-; Build with:  iscc installer.iss   (produces installer\PDFGuide-Setup.exe)
-; Requires the app to be built first:  python -m PyInstaller PDFGuide.spec
+; Inno Setup script for PDF Sherpa
+; Build with:  iscc installer.iss   (produces installer\PDFSherpa-Setup.exe)
+; Requires the app to be built first:  python -m PyInstaller PDFSherpa.spec
 
-#define AppName "PDF Guide"
+#define AppName "PDF Sherpa"
 #define AppVersion "1.0.0"
-#define AppExe "PDFGuide.exe"
+#define AppExe "PDFSherpa.exe"
 
 [Setup]
 AppName={#AppName}
@@ -14,7 +14,7 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=installer
-OutputBaseFilename=PDFGuide-Setup
+OutputBaseFilename=PDFSherpa-Setup
 Compression=lzma2
 SolidCompression=yes
 ; Per-user install so no admin rights are needed.

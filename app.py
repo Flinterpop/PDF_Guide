@@ -1,6 +1,6 @@
 """
-PDF Guide
-=========
+PDF Sherpa
+==========
 
 A small desktop app that:
 
@@ -132,7 +132,7 @@ def load_metadata(metadata_path: str) -> list[tuple[str, int]]:
 # ----------------------------------------------------------------------------
 # GUI
 # ----------------------------------------------------------------------------
-class PDFGuideApp(ttk.Frame):
+class PDFSherpaApp(ttk.Frame):
     def __init__(self, master: tk.Tk, folder: str):
         super().__init__(master, padding=6)
         self.master = master
@@ -892,7 +892,10 @@ def _page_key(pdf_path: str) -> str:
 
 
 def _config_path() -> str:
-    """Per-user settings file (persists across runs, incl. the frozen exe)."""
+    """Per-user settings file (persists across runs, incl. the frozen exe).
+
+    The folder stays "PDFGuide" (the app's former name) so settings saved
+    before the rename to PDF Sherpa keep working."""
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
     return os.path.join(base, "PDFGuide", "config.json")
 
@@ -942,7 +945,7 @@ def main() -> None:
     folder = sys.argv[1] if len(sys.argv) > 1 else _default_folder()
 
     root = tk.Tk()
-    root.title("PDF Guide")
+    root.title("PDF Sherpa")
     root.geometry("1100x720")
 
     icon = _resource_path("bookicon.ico")
@@ -959,7 +962,7 @@ def main() -> None:
             "Install them with:\n    pip install pymupdf pillow\n\n"
             "The app will still list PDFs and topics.")
 
-    PDFGuideApp(root, folder)
+    PDFSherpaApp(root, folder)
     root.mainloop()
 
 
