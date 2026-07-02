@@ -948,7 +948,7 @@ def main() -> None:
     root.title("PDF Sherpa")
     root.geometry("1100x720")
 
-    icon = _resource_path("bookicon.ico")
+    icon = _resource_path("sherpaicon.ico")
     if os.path.isfile(icon):
         try:
             root.iconbitmap(icon)
