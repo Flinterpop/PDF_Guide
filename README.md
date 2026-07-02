@@ -1,5 +1,10 @@
 # PDF Guide
 
+[![GitHub repo](https://img.shields.io/badge/GitHub-Flinterpop%2FPDF__Guide-181717?logo=github)](https://github.com/Flinterpop/PDF_Guide)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
+![GUI](https://img.shields.io/badge/GUI-Tkinter-FFD43B)
+
 A small desktop app (Tkinter) that lets you browse PDFs by topic.
 
 - **Left pane** — lists every PDF in a subfolder (default `./pdfs`).
