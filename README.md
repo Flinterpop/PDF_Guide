@@ -4,7 +4,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![GUI](https://img.shields.io/badge/GUI-Tkinter-FFD43B)
-[![License](https://img.shields.io/github/license/Flinterpop/PDF_Guide?cacheSeconds=86400)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A small desktop app (Tkinter) that lets you browse PDFs by topic.
 
