@@ -154,6 +154,10 @@ class PDFSherpaApp(ttk.Frame):
         self.topic_filter_text = ""     # current topic-list search filter
         self._topic_entries: list[tuple[str, int]] = []  # current PDF's topics
         self._topic_placeholder: str | None = None  # shown instead of topics
+        # Content search over the open PDF: (page_index, fitz.Rect) per hit.
+        self.content_matches: list[tuple[int, object]] = []
+        self.content_match_idx = -1     # index into content_matches (-1 = none)
+        self._content_search_after: str | None = None  # debounce timer id
         # Re-fit the page when a window resize settles (debounced).
         self._resize_after: str | None = None
         self._last_canvas_size = (0, 0)
@@ -269,6 +273,32 @@ class PDFSherpaApp(ttk.Frame):
 
         # 3. Embedded viewer
         right = ttk.Frame(panes)
+
+        # Search / find box (searches the text of the currently open PDF)
+        content_search = ttk.Frame(right)
+        content_search.pack(side="top", fill="x", pady=(0, 4))
+        ttk.Label(content_search, text="🔍").pack(side="left")
+        self.content_search_var = tk.StringVar()
+        self.content_search_var.trace_add("write",
+                                          self._on_content_search_changed)
+        self.content_search_entry = ttk.Entry(
+            content_search, textvariable=self.content_search_var)
+        self.content_search_entry.pack(side="left", fill="x", expand=True,
+                                       padx=(4, 0))
+        self.content_search_entry.bind("<Return>", self._on_content_return)
+        self.content_search_entry.bind("<Shift-Return>",
+                                       lambda e: self.prev_match() or "break")
+        ttk.Button(content_search, text="▲", width=2,
+                   command=self.prev_match).pack(side="left", padx=(4, 0))
+        ttk.Button(content_search, text="▼", width=2,
+                   command=self.next_match).pack(side="left")
+        self.match_var = tk.StringVar()
+        ttk.Label(content_search, textvariable=self.match_var,
+                  width=10, anchor="center").pack(side="left")
+        ttk.Button(content_search, text="✕", width=2,
+                   command=lambda: self.content_search_var.set("")
+                   ).pack(side="left")
+
         nav = ttk.Frame(right)
         nav.pack(side="top", fill="x")
         ttk.Button(nav, text="◀ Prev",
@@ -335,6 +365,12 @@ class PDFSherpaApp(ttk.Frame):
 
         # Refresh the PDF list (offers to build missing topic lists).
         top.bind("<F5>", lambda e: self.on_refresh_clicked())
+
+        # Content search: Ctrl+F focuses the box, F3 / Shift+F3 step matches.
+        top.bind("<Control-f>",
+                 lambda e: (self.content_search_entry.focus_set(), "break")[1])
+        top.bind("<F3>", lambda e: (self.next_match(), "break")[1])
+        top.bind("<Shift-F3>", lambda e: (self.prev_match(), "break")[1])
 
         # Mouse wheel over the viewer scrolls the page and flips at the edges.
         top.bind_all("<MouseWheel>", self._on_mousewheel)
@@ -803,6 +839,107 @@ class PDFSherpaApp(ttk.Frame):
         self.topic_filter_text = self.topic_search_var.get().strip()
         self._populate_topic_tree()
 
+    # -- Content search (text of the open PDF) --------------------------------
+    def _on_content_search_changed(self, *_args) -> None:
+        # Debounce: searching every page on each keystroke would stutter.
+        if self._content_search_after is not None:
+            self.after_cancel(self._content_search_after)
+        self._content_search_after = self.after(300, self._run_content_search)
+
+    def _on_content_return(self, _event=None) -> str:
+        """Enter runs a pending search immediately, otherwise steps to the
+        next match."""
+        if self._content_search_after is not None:
+            self.after_cancel(self._content_search_after)
+            self._content_search_after = None
+            self._run_content_search()
+        else:
+            self.next_match()
+        return "break"
+
+    def _run_content_search(self, jump: bool = True) -> None:
+        self._content_search_after = None
+        self.content_matches = []
+        self.content_match_idx = -1
+        needle = self.content_search_var.get().strip()
+        if self.doc is None or not needle:
+            self._update_match_label()
+            if self.doc is not None:
+                self.render_page()   # drop any old highlights
+            return
+        for pno in range(self.doc.page_count):
+            for rect in self.doc[pno].search_for(needle):
+                self.content_matches.append((pno, rect))
+        self._update_match_label()
+        if self.content_matches and jump:
+            self.next_match()        # from -1: first hit on/after this page
+        else:
+            self.render_page()       # just repaint highlights (if any)
+
+    def next_match(self) -> None:
+        self._step_match(1)
+
+    def prev_match(self) -> None:
+        self._step_match(-1)
+
+    def _step_match(self, delta: int) -> None:
+        if not self.content_matches:
+            return
+        if self.content_match_idx == -1:
+            # First jump goes to the nearest hit on/after the current page.
+            idx = next((i for i, (p, _) in enumerate(self.content_matches)
+                        if p >= self.current_page), 0)
+            if delta < 0:
+                idx = (idx - 1) % len(self.content_matches)
+        else:
+            idx = (self.content_match_idx + delta) % len(self.content_matches)
+        self.content_match_idx = idx
+        pno, rect = self.content_matches[idx]
+        self.goto_page(pno)          # re-renders, drawing the highlights
+        self._update_match_label()
+        self._scroll_match_into_view(rect)
+
+    def _update_match_label(self) -> None:
+        if not self.content_search_var.get().strip():
+            self.match_var.set("")
+        elif not self.content_matches:
+            self.match_var.set("0 / 0")
+        else:
+            pos = "–" if self.content_match_idx < 0 \
+                else self.content_match_idx + 1
+            self.match_var.set(f"{pos} / {len(self.content_matches)}")
+
+    def _scroll_match_into_view(self, rect) -> None:
+        """Scroll the canvas so the match sits about a third of the way down
+        the view (render_page resets the scroll to the top)."""
+        if self.doc is None:
+            return
+        page = self.doc[self.current_page]
+        page_w = (page.rect.width or 1) * self.zoom
+        page_h = (page.rect.height or 1) * self.zoom
+        view_w = self.canvas.winfo_width() or 1
+        view_h = self.canvas.winfo_height() or 1
+        if page_h > view_h:
+            frac = (rect.y0 * self.zoom - view_h / 3) / page_h
+            self.canvas.yview_moveto(max(0.0, min(1.0, frac)))
+        if page_w > view_w:
+            frac = (rect.x0 * self.zoom - view_w / 3) / page_w
+            self.canvas.xview_moveto(max(0.0, min(1.0, frac)))
+
+    def _draw_match_highlights(self) -> None:
+        """Overlay match rectangles on the rendered page (canvas coordinates
+        are PDF points scaled by the current zoom)."""
+        z = self.zoom
+        for i, (pno, rect) in enumerate(self.content_matches):
+            if pno != self.current_page:
+                continue
+            current = i == self.content_match_idx
+            self.canvas.create_rectangle(
+                rect.x0 * z, rect.y0 * z, rect.x1 * z, rect.y1 * z,
+                outline="#e07000" if current else "#c8a800",
+                width=2 if current else 1,
+                fill="#ffd000", stipple="gray25")
+
     def on_topic_selected(self, _event=None) -> None:
         selection = self.topic_tree.selection()
         if not selection:
@@ -845,6 +982,10 @@ class PDFSherpaApp(ttk.Frame):
         self.fit_mode = self.fit_pref   # open in the last-used fit preference
         self.render_page()
         update_config({"last_pdf": pdf_path})
+        # Re-run an active content search against the new document, but stay
+        # on the restored page (matches highlight; ▼/Enter jumps to one).
+        if self.content_search_var.get().strip():
+            self._run_content_search(jump=False)
 
     def goto_page(self, page_index: int) -> None:
         if self.doc is None:
@@ -937,6 +1078,7 @@ class PDFSherpaApp(ttk.Frame):
 
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+        self._draw_match_highlights()
         self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
         self.canvas.yview_moveto(0)
         self.page_var.set(
