@@ -155,9 +155,16 @@ class PDFSherpaApp(ttk.Frame):
         self._topic_entries: list[tuple[str, int]] = []  # current PDF's topics
         self._topic_placeholder: str | None = None  # shown instead of topics
         # Content search over the open PDF: (page_index, fitz.Rect) per hit.
+        # The scan runs in chunks on the Tk event loop so big documents don't
+        # freeze the UI; matches/label fill in progressively.
         self.content_matches: list[tuple[int, object]] = []
         self.content_match_idx = -1     # index into content_matches (-1 = none)
         self._content_search_after: str | None = None  # debounce timer id
+        self._content_scan_after: str | None = None    # next-chunk timer id
+        self._content_scan_active = False
+        self._content_scan_needle = ""
+        self._content_scan_page = 0     # next page the scan will read
+        self._content_scan_jump = False  # jump to the first hit when found
         # Re-fit the page when a window resize settles (debounced).
         self._resize_after: str | None = None
         self._last_canvas_size = (0, 0)
@@ -859,6 +866,7 @@ class PDFSherpaApp(ttk.Frame):
 
     def _run_content_search(self, jump: bool = True) -> None:
         self._content_search_after = None
+        self._cancel_content_scan()
         self.content_matches = []
         self.content_match_idx = -1
         needle = self.content_search_var.get().strip()
@@ -867,14 +875,57 @@ class PDFSherpaApp(ttk.Frame):
             if self.doc is not None:
                 self.render_page()   # drop any old highlights
             return
-        for pno in range(self.doc.page_count):
-            for rect in self.doc[pno].search_for(needle):
-                self.content_matches.append((pno, rect))
+        self._content_scan_active = True
+        self._content_scan_needle = needle
+        self._content_scan_page = 0
+        self._content_scan_jump = jump
         self._update_match_label()
-        if self.content_matches and jump:
-            self.next_match()        # from -1: first hit on/after this page
+        self.render_page()           # drop highlights from the old query
+        self._content_scan_chunk()
+
+    def _cancel_content_scan(self) -> None:
+        if self._content_scan_after is not None:
+            self.after_cancel(self._content_scan_after)
+            self._content_scan_after = None
+        self._content_scan_active = False
+
+    def _content_scan_chunk(self, pages_per_chunk: int = 50) -> None:
+        """Scan the next slice of pages for the current needle, then yield to
+        the event loop and reschedule -- keeps the UI live on huge PDFs."""
+        self._content_scan_after = None
+        if self.doc is None or not self._content_scan_active:
+            return
+        end = min(self._content_scan_page + pages_per_chunk,
+                  self.doc.page_count)
+        found_on_current = False
+        for pno in range(self._content_scan_page, end):
+            for rect in self.doc[pno].search_for(self._content_scan_needle):
+                self.content_matches.append((pno, rect))
+                found_on_current |= pno == self.current_page
+        self._content_scan_page = end
+        done = end >= self.doc.page_count
+
+        if self._content_scan_jump:
+            # Jump once we know the first hit on/after the page we started
+            # on; if the whole scan ends without one, wrap to the first hit.
+            idx = next((i for i, (p, _) in enumerate(self.content_matches)
+                        if p >= self.current_page), None)
+            if idx is None and done and self.content_matches:
+                idx = 0
+            if idx is not None:
+                self._content_scan_jump = False
+                if done:
+                    self._content_scan_active = False
+                self._select_match(idx)
+        elif found_on_current:
+            self.render_page()       # paint new highlights on the shown page
+
+        if done:
+            self._content_scan_active = False
+            self._update_match_label()
         else:
-            self.render_page()       # just repaint highlights (if any)
+            self._update_match_label()
+            self._content_scan_after = self.after(1, self._content_scan_chunk)
 
     def next_match(self) -> None:
         self._step_match(1)
@@ -893,6 +944,9 @@ class PDFSherpaApp(ttk.Frame):
                 idx = (idx - 1) % len(self.content_matches)
         else:
             idx = (self.content_match_idx + delta) % len(self.content_matches)
+        self._select_match(idx)
+
+    def _select_match(self, idx: int) -> None:
         self.content_match_idx = idx
         pno, rect = self.content_matches[idx]
         self.goto_page(pno)          # re-renders, drawing the highlights
@@ -902,12 +956,18 @@ class PDFSherpaApp(ttk.Frame):
     def _update_match_label(self) -> None:
         if not self.content_search_var.get().strip():
             self.match_var.set("")
-        elif not self.content_matches:
-            self.match_var.set("0 / 0")
+            return
+        n = len(self.content_matches)
+        if not self._content_scan_active:
+            pos = self.content_match_idx + 1 if self.content_match_idx >= 0 \
+                else ("–" if n else 0)
+            self.match_var.set(f"{pos} / {n}")
+        elif n == 0:
+            self.match_var.set("…")   # scan under way, nothing found yet
         else:
             pos = "–" if self.content_match_idx < 0 \
                 else self.content_match_idx + 1
-            self.match_var.set(f"{pos} / {len(self.content_matches)}")
+            self.match_var.set(f"{pos} / {n}…")
 
     def _scroll_match_into_view(self, rect) -> None:
         """Scroll the canvas so the match sits about a third of the way down
@@ -965,6 +1025,8 @@ class PDFSherpaApp(ttk.Frame):
             return
         if pdf_path == self.current_pdf_path:
             return
+        # Stop any in-flight content scan before the document goes away.
+        self._cancel_content_scan()
         try:
             if self.doc is not None:
                 self.doc.close()
@@ -986,6 +1048,10 @@ class PDFSherpaApp(ttk.Frame):
         # on the restored page (matches highlight; ▼/Enter jumps to one).
         if self.content_search_var.get().strip():
             self._run_content_search(jump=False)
+        elif self.content_matches:
+            self.content_matches = []      # drop hits from the previous PDF
+            self.content_match_idx = -1
+            self._update_match_label()
 
     def goto_page(self, page_index: int) -> None:
         if self.doc is None:
