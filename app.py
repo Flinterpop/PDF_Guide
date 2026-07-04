@@ -695,7 +695,14 @@ class PDFSherpaApp(ttk.Frame):
         win = tk.Toplevel(self)
         self._help_win = win
         win.title("PDF Sherpa — Help")
-        win.geometry("660x740")
+        # Open centered over the main window (clamped to the screen).
+        w, h = 660, 740
+        top = self.winfo_toplevel()
+        x = top.winfo_rootx() + (top.winfo_width() - w) // 2
+        y = top.winfo_rooty() + (top.winfo_height() - h) // 2
+        x = max(0, min(x, win.winfo_screenwidth() - w))
+        y = max(0, min(y, win.winfo_screenheight() - h))
+        win.geometry(f"{w}x{h}+{x}+{y}")
         icon = _resource_path("sherpaicon.ico")
         if os.path.isfile(icon):
             try:
