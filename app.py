@@ -268,9 +268,6 @@ class PDFSherpaApp(ttk.Frame):
                      "Show or hide the Topics pane.\n"
                      "Hide both panes for a full-width reading view.")
 
-        self.folder_var = tk.StringVar()
-        ttk.Label(toolbar, textvariable=self.folder_var,
-                  foreground="#555").pack(side="left", padx=10)
 
         # Three resizable panes: PDFs | topics | viewer
         panes = self.panes = ttk.PanedWindow(self, orient="horizontal")
@@ -734,7 +731,8 @@ class PDFSherpaApp(ttk.Frame):
             self.refresh_pdf_list()
 
     def refresh_pdf_list(self) -> None:
-        self.folder_var.set(os.path.abspath(self.folder))
+        self.winfo_toplevel().title(
+            f"PDF Sherpa - V{APP_VERSION} - {os.path.abspath(self.folder)}")
         self.pdf_tree.delete(*self.pdf_tree.get_children())
         self._pdf_by_iid: dict[str, str] = {}   # tree item id -> pdf path
         self._folder_rel_by_iid: dict[str, str] = {}   # folder iid -> rel path
