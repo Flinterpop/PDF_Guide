@@ -71,6 +71,37 @@ MAX_ZOOM = 4.0
 ZOOM_STEP = 1.25
 
 
+def _add_tooltip(widget, text: str, delay_ms: int = 500) -> None:
+    """Attach a hover tooltip to a widget (Tk has none built in).  Works on
+    disabled widgets too -- they still receive Enter/Leave events."""
+    state = {"after": None, "tip": None}
+
+    def show():
+        state["after"] = None
+        tip = tk.Toplevel(widget)
+        tip.wm_overrideredirect(True)     # no title bar / border
+        tip.wm_geometry(f"+{widget.winfo_rootx() + 10}"
+                        f"+{widget.winfo_rooty() + widget.winfo_height() + 4}")
+        tk.Label(tip, text=text, justify="left", background="#ffffe0",
+                 relief="solid", borderwidth=1, padx=6, pady=4).pack()
+        state["tip"] = tip
+
+    def enter(_event):
+        state["after"] = widget.after(delay_ms, show)
+
+    def leave(_event):
+        if state["after"] is not None:
+            widget.after_cancel(state["after"])
+            state["after"] = None
+        if state["tip"] is not None:
+            state["tip"].destroy()
+            state["tip"] = None
+
+    widget.bind("<Enter>", enter, add="+")
+    widget.bind("<Leave>", leave, add="+")
+    widget.bind("<ButtonPress>", leave, add="+")
+
+
 # ----------------------------------------------------------------------------
 # Metadata loading
 # ----------------------------------------------------------------------------
@@ -204,8 +235,12 @@ class PDFSherpaApp(ttk.Frame):
 
         ttk.Button(toolbar, text="Choose folder…",
                    command=self.choose_folder).pack(side="left")
-        ttk.Button(toolbar, text="Refresh",
-                   command=self.on_refresh_clicked).pack(side="left", padx=(4, 0))
+        refresh_btn = ttk.Button(toolbar, text="Refresh",
+                                 command=self.on_refresh_clicked)
+        refresh_btn.pack(side="left", padx=(4, 0))
+        _add_tooltip(refresh_btn,
+                     "Rescan the folder for PDFs (F5) and offer to build\n"
+                     "topic lists for any PDFs that don't have one yet.")
         ttk.Button(toolbar, text="Help",
                    command=self.show_help).pack(side="right")
 
@@ -216,14 +251,22 @@ class PDFSherpaApp(ttk.Frame):
             value=bool(cfg.get("show_pdf_list", True)))
         self.show_topics_var = tk.BooleanVar(
             value=bool(cfg.get("show_topics", True)))
-        ttk.Checkbutton(toolbar, text="PDFs", style="Toolbutton",
-                        variable=self.show_pdfs_var,
-                        command=self._apply_pane_visibility
-                        ).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(toolbar, text="Topics", style="Toolbutton",
-                        variable=self.show_topics_var,
-                        command=self._apply_pane_visibility
-                        ).pack(side="left", padx=(2, 0))
+        pdfs_toggle = ttk.Checkbutton(toolbar, text="PDFs",
+                                      style="Toolbutton",
+                                      variable=self.show_pdfs_var,
+                                      command=self._apply_pane_visibility)
+        pdfs_toggle.pack(side="left", padx=(12, 0))
+        _add_tooltip(pdfs_toggle,
+                     "Show or hide the PDF list pane.\n"
+                     "Hide both panes for a full-width reading view.")
+        topics_toggle = ttk.Checkbutton(toolbar, text="Topics",
+                                        style="Toolbutton",
+                                        variable=self.show_topics_var,
+                                        command=self._apply_pane_visibility)
+        topics_toggle.pack(side="left", padx=(2, 0))
+        _add_tooltip(topics_toggle,
+                     "Show or hide the Topics pane.\n"
+                     "Hide both panes for a full-width reading view.")
 
         self.folder_var = tk.StringVar()
         ttk.Label(toolbar, textvariable=self.folder_var,
@@ -329,10 +372,14 @@ class PDFSherpaApp(ttk.Frame):
         self.content_search_entry.bind("<Return>", self._on_content_return)
         self.content_search_entry.bind("<Shift-Return>",
                                        lambda e: self.prev_match() or "break")
-        ttk.Button(content_search, text="▲", width=2,
-                   command=self.prev_match).pack(side="left", padx=(4, 0))
-        ttk.Button(content_search, text="▼", width=2,
-                   command=self.next_match).pack(side="left")
+        prev_btn = ttk.Button(content_search, text="▲", width=2,
+                              command=self.prev_match)
+        prev_btn.pack(side="left", padx=(4, 0))
+        _add_tooltip(prev_btn, "Previous search match (Shift+F3)")
+        next_btn = ttk.Button(content_search, text="▼", width=2,
+                              command=self.next_match)
+        next_btn.pack(side="left")
+        _add_tooltip(next_btn, "Next search match (F3)")
         self.match_var = tk.StringVar()
         ttk.Label(content_search, textvariable=self.match_var,
                   width=10, anchor="center").pack(side="left")
@@ -352,19 +399,31 @@ class PDFSherpaApp(ttk.Frame):
                                         state="disabled",
                                         command=self.highlight_selection)
         self.highlight_btn.pack(side="left", padx=(12, 0))
+        _add_tooltip(self.highlight_btn,
+                     "Hold the left mouse button and drag across text on\n"
+                     "the page — selected words shade blue — then click\n"
+                     "Highlight. Save writes the highlights into the PDF.")
         self.save_btn = ttk.Button(nav, text="Save", state="disabled",
                                    command=self.save_annotations)
         self.save_btn.pack(side="left", padx=(4, 0))
+        _add_tooltip(self.save_btn,
+                     "Write highlights to disk (Ctrl+S): choose between an\n"
+                     "annotated copy — name(ann).pdf — or the original file.")
         ttk.Button(nav, text="−",
                    command=lambda: self.change_zoom(1 / ZOOM_STEP)
                    ).pack(side="right")
         ttk.Button(nav, text="+",
                    command=lambda: self.change_zoom(ZOOM_STEP)
                    ).pack(side="right", padx=(0, 4))
-        ttk.Button(nav, text="Full page",
-                   command=self.fit_page).pack(side="right", padx=(0, 4))
-        ttk.Button(nav, text="Fit width",
-                   command=self.fit_width).pack(side="right", padx=4)
+        full_btn = ttk.Button(nav, text="Full page", command=self.fit_page)
+        full_btn.pack(side="right", padx=(0, 4))
+        _add_tooltip(full_btn,
+                     "Fit the whole page in the viewer and resize the\n"
+                     "window to match it (P). Dragging a window edge then\n"
+                     "zooms the page to follow.")
+        fit_btn = ttk.Button(nav, text="Fit width", command=self.fit_width)
+        fit_btn.pack(side="right", padx=4)
+        _add_tooltip(fit_btn, "Scale the page to the viewer width (W)")
 
         canvas_wrap = ttk.Frame(right)
         canvas_wrap.pack(fill="both", expand=True)
