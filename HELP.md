@@ -12,6 +12,11 @@ built-in viewer.
 - **Viewer** (right) — the embedded page view, with a search box that finds
   text inside the open PDF (see **Searching** below).
 
+The **PDFs** and **Topics** buttons in the toolbar collapse and restore the
+left and middle panes — turn both off for a full-width reading view. Your
+choice is remembered across runs, and hidden panes keep their state (selection,
+search text) while collapsed.
+
 ## Adding PDFs
 
 **Drag and drop** one or more PDF files anywhere onto the window. Each is

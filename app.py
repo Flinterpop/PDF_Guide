@@ -193,12 +193,28 @@ class PDFSherpaApp(ttk.Frame):
         ttk.Button(toolbar, text="Help",
                    command=self.show_help).pack(side="right")
 
+        # Pane visibility toggles (pressed = shown); with both off only the
+        # viewer remains.  Persisted across runs.
+        cfg = load_config()
+        self.show_pdfs_var = tk.BooleanVar(
+            value=bool(cfg.get("show_pdf_list", True)))
+        self.show_topics_var = tk.BooleanVar(
+            value=bool(cfg.get("show_topics", True)))
+        ttk.Checkbutton(toolbar, text="PDFs", style="Toolbutton",
+                        variable=self.show_pdfs_var,
+                        command=self._apply_pane_visibility
+                        ).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(toolbar, text="Topics", style="Toolbutton",
+                        variable=self.show_topics_var,
+                        command=self._apply_pane_visibility
+                        ).pack(side="left", padx=(2, 0))
+
         self.folder_var = tk.StringVar()
         ttk.Label(toolbar, textvariable=self.folder_var,
                   foreground="#555").pack(side="left", padx=10)
 
         # Three resizable panes: PDFs | topics | viewer
-        panes = ttk.PanedWindow(self, orient="horizontal")
+        panes = self.panes = ttk.PanedWindow(self, orient="horizontal")
         panes.pack(fill="both", expand=True)
 
         # 1. PDF list (grouped by subfolder under the top-level folder)
@@ -242,6 +258,7 @@ class PDFSherpaApp(ttk.Frame):
         self.pdf_menu.add_command(label="Reveal in Explorer",
                                   command=self._ctx_reveal)
         self._ctx_path: str | None = None
+        self._left_pane = left
         panes.add(left, weight=1)
 
         # 2. Topics
@@ -276,6 +293,7 @@ class PDFSherpaApp(ttk.Frame):
         topic_sb.pack(side="right", fill="y")
         self.topic_tree.config(yscrollcommand=topic_sb.set)
         self.topic_tree.bind("<<TreeviewSelect>>", self.on_topic_selected)
+        self._mid_pane = mid
         panes.add(mid, weight=1)
 
         # 3. Embedded viewer
@@ -341,6 +359,33 @@ class PDFSherpaApp(ttk.Frame):
         canvas_wrap.rowconfigure(0, weight=1)
         canvas_wrap.columnconfigure(0, weight=1)
         panes.add(right, weight=3)
+
+        self._apply_pane_visibility(persist=False)   # restore saved toggles
+
+    # -- Pane visibility -------------------------------------------------------
+    def _apply_pane_visibility(self, persist: bool = True) -> None:
+        """Add/remove the PDF-list and Topics panes to match the toolbar
+        toggles.  Removing a pane keeps its widgets (and state) intact, so
+        re-showing it is instant."""
+        show_left = self.show_pdfs_var.get()
+        show_mid = self.show_topics_var.get()
+
+        def present(widget) -> bool:
+            return str(widget) in self.panes.panes()
+
+        if show_left and not present(self._left_pane):
+            self.panes.insert(0, self._left_pane, weight=1)
+        elif not show_left and present(self._left_pane):
+            self.panes.forget(self._left_pane)
+
+        if show_mid and not present(self._mid_pane):
+            self.panes.insert(1 if show_left else 0, self._mid_pane, weight=1)
+        elif not show_mid and present(self._mid_pane):
+            self.panes.forget(self._mid_pane)
+
+        if persist:
+            update_config({"show_pdf_list": show_left,
+                           "show_topics": show_mid})
 
     # -- Keyboard shortcuts ---------------------------------------------------
     def _bind_shortcuts(self) -> None:
