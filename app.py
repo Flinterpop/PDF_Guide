@@ -176,6 +176,7 @@ class PDFSherpaApp(ttk.Frame):
         self._fit_master: str | None = None
         self._fitted_canvas_size: tuple[int, int] | None = None
         self._saved_sashes: list[int] | None = None  # pane widths pre-snap
+        self._last_pix: tuple[int, int] | None = None  # last rendered size
         self._last_canvas_size = (0, 0)
         # Remembered open folders (relative paths); folders start closed unless
         # listed here.  Persisted across runs.
@@ -1114,6 +1115,7 @@ class PDFSherpaApp(ttk.Frame):
         changed = page_index != self.current_page
         self.current_page = page_index
         self.render_page()
+        self._maybe_snap()
         if changed and self.current_pdf_path:
             self._save_last_page(self.current_pdf_path, page_index)
 
@@ -1147,6 +1149,7 @@ class PDFSherpaApp(ttk.Frame):
         self.fit_mode = self.fit_pref = mode
         update_config({"fit_pref": mode})
         self.render_page()
+        self._maybe_snap()
 
     def _on_canvas_configure(self, event) -> None:
         """Re-apply the active fit once a window/pane resize has settled.
@@ -1178,6 +1181,7 @@ class PDFSherpaApp(ttk.Frame):
             self._fit_master = "w" if abs(dw) >= abs(dh) else "h"
         try:
             self.render_page()   # _apply_fit recomputes zoom for the new size
+            self._maybe_snap()
         finally:
             self._fit_master = None
 
@@ -1220,8 +1224,15 @@ class PDFSherpaApp(ttk.Frame):
         self.canvas.yview_moveto(0)
         self.page_var.set(
             f"Page {self.current_page + 1} / {self.doc.page_count}")
-        if self.fit_mode == "page":
-            self._snap_window_to_page(pix.width, pix.height)
+        self._last_pix = (pix.width, pix.height)
+
+    def _maybe_snap(self) -> None:
+        """Snap the window to the page in full-page mode.  Called from the
+        actions that should resize the window (Full page button, page turns,
+        user window resizes) -- deliberately NOT from every render, so e.g.
+        selecting a different PDF never moves the window."""
+        if self.fit_mode == "page" and self.doc is not None and self._last_pix:
+            self._snap_window_to_page(*self._last_pix)
 
     def _snap_window_to_page(self, page_w: int, page_h: int) -> None:
         """Full-page mode: resize the toplevel so the canvas hugs the rendered
@@ -1268,7 +1279,8 @@ class PDFSherpaApp(ttk.Frame):
             except tk.TclError:
                 pass
         self._saved_sashes = None
-        self.render_page()       # re-fits to the new size and snaps again
+        self.render_page()       # re-fits to the new size...
+        self._maybe_snap()       # ...and snaps again if still off
 
     def _render_message(self, message: str) -> None:
         self.canvas.delete("all")
