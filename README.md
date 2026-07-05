@@ -70,8 +70,16 @@ check, add `"check_updates": false` to `%APPDATA%\PDFGuide\config.json`.
 
 ## Standalone build & installer (Windows)
 
-Build the one-file exe, then compile the installer and zip the portable
-variant:
+To cut a full release in one step (bump versions, build everything, commit,
+push, publish the GitHub release, reinstall locally):
+
+```
+.\release.ps1 1.3.7                     # notes auto-generated from commits
+.\release.ps1 1.3.7 -NotesFile notes.md # or hand-written notes
+```
+
+Or do the steps by hand — build the one-file exe, then compile the installer
+and zip the portable variant:
 
 ```
 python -m PyInstaller PDFSherpa.spec       # -> dist\PDFSherpa.exe
