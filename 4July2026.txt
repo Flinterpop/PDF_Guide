@@ -1,0 +1,2515 @@
+╭─── Claude Code v2.1.200 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                 Welcome back Brad!                 │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ What's new              │
+│                        ▘▘ ▝▝                       │ Changed `AskUserQuesti… │
+│   Fable 5 · Claude Max · graham.bm@rabidfox.ca's   │ Changed the "default" … │
+│   Organization                                     │ Fixed a crash at start… │
+│               C:\source_py\PDF_Guide               │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ ▎ Fable 5 is back.
+ ▎ Until July 7, you can use up to 50% of your plan's weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 4.8. Learn more
+
+❯ review PDFSherpa and consider how bookmarks could be added on a per PDF basis 
+
+● I'll start by exploring the PDFSherpa codebase to understand its structure and
+  how bookmarks might fit in.
+
+● Explore(Explore PDFSherpa codebase)
+  ⎿  Done (16 tool uses · 42.9k tokens · 2m 2s)
+  (ctrl+o to expand)
+
+● User answered Claude's questions:
+  ⎿  · Should bookmarks have user-editable names, or just be page markers? → 
+     Named bookmarks (Recommended)
+     · Where should the bookmark list appear in the UI? → Section in Topics pane
+     (Recommended)
+     · Where should bookmarks be stored? → Sidecar file per PDF
+
+● Named bookmarks, shown in the Topics pane, stored in a sidecar file next to
+  each PDF. Now I'll have a Plan agent design the implementation.
+
+● Plan(Design bookmarks feature plan)
+  ⎿  Done (15 tool uses · 47.2k tokens · 3m 1s)
+  (ctrl+o to expand)
+
+● The design looks solid. Let me verify the key integration points in the actual
+  code before writing the final plan.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● All integration points verified against the code. Now writing the final plan.
+
+● Updated plan
+  ⎿  /plan to preview
+
+● User approved Claude's plan
+  ⎿  Plan saved to: 
+     ~\.claude\plans\review-pdfsherpa-and-consider-floating-blum.md · /plan to 
+     edit
+     Per-PDF Named Bookmarks for PDF Sherpa
+
+     Context
+
+     PDF Sherpa remembers your last-read page per PDF, but there's no way to
+     mark and name multiple places in a document. This adds user-created named 
+     bookmarks, per PDF: bookmark the current page (default name "Page N",
+     renameable), see them at the top of the Topics pane, click to jump,
+     right-click to rename/delete. Bookmarks are stored in a sidecar file next 
+     to each PDF (manual.pdf → manual.bookmarks.json) so they travel with the
+     folder — consistent with the app's existing .toc/.json topics-sidecar
+     convention.
+
+     All code changes are in the single-file app C:\source_py\PDF_Guide\app.py
+     (class PDFSherpaApp), plus docs/version files.
+
+     Data model
+
+     - Sidecar: os.path.splitext(pdf_path)[0] + ".bookmarks.json". The double
+     extension can't collide with find_metadata_path (app.py:108), which only
+     checks base + ".toc" / base + ".json".
+     - Format — a bare JSON list, mirroring the topics .json format
+     (app.py:147), 1-based pages, hand-editable:
+     [{"page": 12, "title": "Wiring diagram"}]
+     - In memory: self._bookmarks: list[dict] kept sorted ascending by page.
+     Duplicate pages allowed (labels differ).
+
+     Changes
+
+     1. Module-level helpers (after load_metadata, ~app.py:165)
+
+     - bookmarks_path(pdf_path) -> str — path scheme above.
+     - load_bookmarks(pdf_path) -> list[dict] — missing file → [] silently;
+     validate entries (int(page) >= 1, str(title)), sort by page;
+     corrupt/unreadable → messagebox.showwarning + [] (next save overwrites —
+     same spirit as save_config's never-crash-on-write).
+     - save_bookmarks(pdf_path, bookmarks) -> bool — json.dump(..., indent=2),
+     UTF-8. Empty list → delete the sidecar if present (no file = no bookmarks,
+     keeps folders clean). OSError → warning "kept for this session only",
+     return False, keep in-memory state.
+
+     Add simpledialog to the tkinter import at app.py:45.
+
+     2. State (__init__, near self._topic_entries ~app.py:189)
+
+     self._bookmarks = [] and self._bm_menu_index = None (row targeted by
+     right-click).
+
+     3. Load + Topics-tree integration
+
+     - load_topics (app.py:944): first line, self._bookmarks = 
+     load_bookmarks(pdf_path). This is the single choke point — every PDF switch
+     goes through on_pdf_selected → load_topics, and all its branches end in
+     _populate_topic_tree().
+     - _populate_topic_tree (app.py:971): restructure so bookmarks render before
+     the placeholder/topics logic:
+       a. If self._bookmarks (after applying the existing filter needle to
+     bookmark titles): insert parent iid="bm-root", text "Bookmarks",
+     values=("",), open=True; children iid=f"bm-{i}" (index into
+     self._bookmarks), text=title, values=(page,).
+       b. Then the placeholder branch — no longer an early return before
+     bookmarks, so a PDF with no .toc still shows its bookmarks above "(no
+     metadata file found)".
+       c. Topics loop unchanged (Tk auto-iids I001… can't collide with bm-*).
+       d. "(no matches)" row only when the needle filters out both bookmarks and
+     topics.
+     - on_topic_selected (app.py:1321): no functional change — bookmark rows
+     carry a 1-based page in values[0] exactly like topic rows; bm-root has
+     empty values and is already ignored by the existing guard.
+
+     4. Add bookmark — add_bookmark() method (near _on_topic_search_changed 
+     ~app.py:995)
+
+     - Guard: no self.doc/self.current_pdf_path → return.
+     - page = self.current_page + 1; simpledialog.askstring("Add bookmark", ...,
+     initialvalue=f"Page {page}", parent=self); cancel → abort, blank →
+     default.
+     - Insert, re-sort by page, save_bookmarks(...), _populate_topic_tree(),
+     select + see() the new row.
+
+     Three entry points:
+     - Nav-bar button "🔖" after self.save_btn (app.py:403–408), with
+     _add_tooltip mentioning Ctrl+B and right-click rename/delete. Always
+     enabled; no-ops without a doc (like Prev/Next).
+     - Ctrl+B in _bind_shortcuts (~app.py:511): top.bind("<Control-b>", 
+     self._viewer_key(self.add_bookmark)). Must use _viewer_key (app.py:535),
+     not the bare Ctrl+S lambda pattern — Tk entries have a default emacs
+     Control-b binding, and this suppresses the shortcut while typing in a
+     search box.
+     - Canvas right-click: add_separator() + "Bookmark this page" appended to
+     self.canvas_menu (app.py:444–448). Safe: _on_canvas_right_click only
+     entryconfigs indices 0–1.
+
+     5. Rename / delete — Topics-tree context menu (in _build_ui after 
+     topic_tree bindings ~app.py:351)
+
+     - self.bookmark_menu = tk.Menu(self, tearoff=0) with Rename / Delete; bind
+     <Button-3> on topic_tree → _on_topic_right_click.
+     - _on_topic_right_click: identify_row(event.y); only for bm-<i> iids (not
+     bm-root, not topics): store index, select the row, tk_popup.
+     - _rename_bookmark: askstring prefilled with current title; update, save,
+     repopulate, reselect.
+     - _delete_bookmark: remove, save, repopulate. No confirmation (one click to
+     re-add).
+
+     6. (ann) copies — save_annotations (app.py:1279–1287)
+
+     Alongside the existing topics-file copy, also shutil.copyfile the
+     .bookmarks.json sidecar to base + "(ann).bookmarks.json" if present, same
+     try/except-OSError-pass pattern.
+
+     7. Edge cases
+
+     - Page out of range (PDF shrank / hand-edited): keep the bookmark;
+     goto_page (app.py:1377) already clamps.
+     - Read-only folder: warning from save_bookmarks, bookmarks stay usable
+     in-memory for the session.
+     - Filter interplay: free — the tree rebuilds from self._bookmarks on every
+     filter keystroke.
+
+     8. Docs & version
+
+     - APP_VERSION = "1.3.0" (app.py:63) and installer.iss AppVersion in sync
+     (the comment at app.py:62 requires it).
+     - Module docstring feature list (app.py:1–33): add a bookmarks line.
+     - HELP.md: new "## Bookmarks" section (after the Topic files section) +
+     Ctrl+B row in the shortcuts table.
+     - README.md: one feature bullet, matching the 1.2.x style (commit d785ec6).
+
+     Files
+
+     ┌───────────────┬──────────────────────────────────────────────────────────
+     ┐
+     │     File      │                          Change
+     │
+     ├───────────────┼──────────────────────────────────────────────────────────
+     ┤
+     │               │ All feature code (helpers ~:165, state :189, UI
+     │
+     │ app.py        │ :351/:398/:444, shortcuts :511, topics :944–995,
+     │
+     │               │ ann-copy :1279, version :63)
+     │
+     ├───────────────┼──────────────────────────────────────────────────────────
+     ┤
+     │ HELP.md       │ Bookmarks section + shortcut row
+     │
+     ├───────────────┼──────────────────────────────────────────────────────────
+     ┤
+     │ README.md     │ Feature bullet
+     │
+     ├───────────────┼──────────────────────────────────────────────────────────
+     ┤
+     │ installer.iss │ AppVersion bump
+     │
+     └───────────────┴──────────────────────────────────────────────────────────
+     ┘
+
+     Verification
+
+     No test suite exists; verify by compile + helper smoke + manual pass:
+
+     1. python -m py_compile app.py, then run python app.py against a PDF
+     folder.
+     2. Helper round-trip without GUI: save_bookmarks/load_bookmarks on a
+     scratch path — sorting, empty-list-deletes-file, corrupt JSON → warning +
+     [].
+     3. Manual checklist:
+       - Ctrl+B / 🔖 button / canvas right-click each add a bookmark; rename
+     dialog prefilled "Page N"; row appears under "Bookmarks" sorted by page;
+     click jumps; clicking the "Bookmarks" header does nothing; topics still
+     jump.
+       - Right-click bookmark row → Rename/Delete works; right-click topic row
+     does nothing.
+       - Switch PDFs and restart the app — bookmarks persist per PDF via the
+     sidecar; deleting the last bookmark removes the sidecar file.
+       - PDF with no .toc shows bookmarks above "(no metadata file found)";
+     topic filter narrows bookmarks and topics together.
+       - Ctrl+B while typing in a search entry does nothing.
+       - Save highlights as an (ann) copy → bookmarks sidecar copied alongside.
+
+● Plan approved — implementing now. Let me read the remaining sections I need to
+  modify.
+
+  Read 1 file (ctrl+o to expand)
+
+● Now implementing. First the module-level changes:
+
+● Update(app.py)
+  ⎿  Added 2 lines
+      11  3. Clicking a topic/page opens the PDF (embedded viewer) at tha
+          t page.
+      12  4. Drop a PDF anywhere on the window to copy it into an 'inbox'
+           subfolder
+      13     of the current folder and auto-generate its .toc topics file
+          .
+      14 +5. Bookmark pages (Ctrl+B) with your own names; bookmarks show 
+         +at the top                                                     
+      15 +   of the Topics pane and are saved next to the PDF (name.bookm
+         +arks.json).                                                    
+      16  
+      17  Metadata file formats (auto-detected by extension, .toc preferr
+          ed):
+      18  
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 1 line
+      44  import sys
+      45  import webbrowser
+      46  import tkinter as tk
+      47 -from tkinter import ttk, messagebox, filedialog                
+      47 +from tkinter import ttk, messagebox, filedialog, simpledialog  
+      48  
+      49  import tocgen
+      50  
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 1 line
+      62  
+      63  
+      64  # Shown in the window title; keep in sync with AppVersion in in
+          staller.iss.
+      65 -APP_VERSION = "1.2.1"                                          
+      65 +APP_VERSION = "1.3.0"                                          
+      66  
+      67  # Metadata extensions we look for, in order of preference.
+      68  METADATA_EXTENSIONS = (".toc", ".json")
+
+● Update(app.py)
+  ⎿  Added 55 lines
+      167  
+      168  
+      169  # ------------------------------------------------------------
+           ----------------
+      170 +# Bookmarks (per-PDF sidecar: name.bookmarks.json next to the 
+          +PDF)                                                          
+      171 +# ------------------------------------------------------------
+          +----------------                                              
+      172 +def bookmarks_path(pdf_path: str) -> str:                     
+      173 +    """Return the bookmarks sidecar path for a PDF (manual.pdf
+          + ->                                                           
+      174 +    manual.bookmarks.json).  The double extension keeps it cle
+          +ar of the                                                     
+      175 +    .toc/.json metadata lookup in find_metadata_path."""      
+      176 +    return os.path.splitext(pdf_path)[0] + ".bookmarks.json"  
+      177 +                                                              
+      178 +                                                              
+      179 +def load_bookmarks(pdf_path: str) -> list[dict]:              
+      180 +    """Load a PDF's bookmarks: a list of {"page": int, "title"
+          +: str} dicts,                                                 
+      181 +    sorted by page.  Missing sidecar is the normal case -> [].
+          +"""                                                           
+      182 +    path = bookmarks_path(pdf_path)                           
+      183 +    if not os.path.isfile(path):                              
+      184 +        return []                                             
+      185 +    try:                                                      
+      186 +        with open(path, "r", encoding="utf-8") as fh:         
+      187 +            data = json.load(fh)                              
+      188 +        bookmarks = []                                        
+      189 +        for item in data:                                     
+      190 +            page = int(item["page"])                          
+      191 +            title = str(item["title"]).strip()                
+      192 +            if page >= 1 and title:                           
+      193 +                bookmarks.append({"page": page, "title": title
+          +})                                                            
+      194 +        bookmarks.sort(key=lambda b: b["page"])               
+      195 +        return bookmarks                                      
+      196 +    except Exception as exc:  # corrupt/unreadable; next save 
+          +overwrites it                                                 
+      197 +        messagebox.showwarning(                               
+      198 +            "Bookmarks",                                      
+      199 +            f"Could not read {os.path.basename(path)}:\n\n{exc
+          +}\n\n"                                                        
+      200 +            "Starting with no bookmarks for this PDF.")       
+      201 +        return []                                             
+      202 +                                                              
+      203 +                                                              
+      204 +def save_bookmarks(pdf_path: str, bookmarks: list[dict]) -> bo
+          +ol:                                                           
+      205 +    """Write a PDF's bookmarks sidecar; an empty list deletes 
+          +the file                                                      
+      206 +    (no file = no bookmarks).  Returns False if the write fail
+          +ed."""                                                        
+      207 +    path = bookmarks_path(pdf_path)                           
+      208 +    try:                                                      
+      209 +        if not bookmarks:                                     
+      210 +            if os.path.isfile(path):                          
+      211 +                os.remove(path)                               
+      212 +            return True                                       
+      213 +        with open(path, "w", encoding="utf-8") as fh:         
+      214 +            json.dump(bookmarks, fh, indent=2)                
+      215 +        return True                                           
+      216 +    except OSError as exc:                                    
+      217 +        messagebox.showwarning(                               
+      218 +            "Bookmarks",                                      
+      219 +            f"Could not write {path}:\n\n{exc}\n\n"           
+      220 +            "Bookmarks will be kept for this session only.")  
+      221 +        return False                                          
+      222 +                                                              
+      223 +                                                              
+      224 +# ------------------------------------------------------------
+          +----------------                                              
+      225  # GUI
+      226  # ------------------------------------------------------------
+           ----------------
+      227  class PDFSherpaApp(ttk.Frame):
+● Update(app.py)
+  ⎿  Added 4 lines
+      245          self.topic_filter_text = ""     # current topic-list s
+           earch filter
+      246          self._topic_entries: list[tuple[str, int]] = []  # cur
+           rent PDF's topics
+      247          self._topic_placeholder: str | None = None  # shown in
+           stead of topics
+      248 +        # Current PDF's bookmarks ({"page", "title"} dicts, pa
+          +ge-sorted) and                                                
+      249 +        # the list index targeted by the tree's right-click me
+          +nu.                                                           
+      250 +        self._bookmarks: list[dict] = []                      
+      251 +        self._bm_menu_index: int | None = None                
+      252          # Content search over the open PDF: (page_index, fitz.
+           Rect) per hit.
+      253          # The scan runs in chunks on the Tk event loop so big 
+           documents don't
+      254          # freeze the UI; matches/label fill in progressively.
+
+● Update(app.py)
+  ⎿  Added 8 lines
+      410          topic_sb.pack(side="right", fill="y")
+      411          self.topic_tree.config(yscrollcommand=topic_sb.set)
+      412          self.topic_tree.bind("<<TreeviewSelect>>", self.on_top
+           ic_selected)
+      413 +        self.topic_tree.bind("<Button-3>", self._on_topic_righ
+          +t_click)                                                      
+      414 +                                                              
+      415 +        # Right-click context menu for bookmark rows in the to
+          +pic tree                                                      
+      416 +        self.bookmark_menu = tk.Menu(self, tearoff=0)         
+      417 +        self.bookmark_menu.add_command(label="Rename",        
+      418 +                                       command=self._rename_bo
+          +okmark)                                                       
+      419 +        self.bookmark_menu.add_command(label="Delete",        
+      420 +                                       command=self._delete_bo
+          +okmark)                                                       
+      421          self._mid_pane = mid
+      422          panes.add(mid, weight=1)
+      423  
+
+● Update(app.py)
+  ⎿  Added 7 lines
+      475          _add_tooltip(self.save_btn,
+      476                       "Write highlights to disk (Ctrl+S): choos
+           e between an\n"
+      477                       "annotated copy — name(ann).pdf — or the 
+           original file.")
+      478 +        bookmark_btn = ttk.Button(nav, text="🔖", width=3,    
+      479 +                                  command=self.add_bookmark)  
+      480 +        bookmark_btn.pack(side="left", padx=(4, 0))           
+      481 +        _add_tooltip(bookmark_btn,                            
+      482 +                     "Bookmark the current page (Ctrl+B). Book
+          +marks appear\n"                                               
+      483 +                     "at the top of the Topics pane; right-cli
+          +ck one there\n"                                               
+      484 +                     "to rename or delete it.")               
+      485          ttk.Button(nav, text="−",
+      486                     command=lambda: self.change_zoom(1 / ZOOM_S
+           TEP)
+      487                     ).pack(side="right")
+
+● Update(app.py)
+  ⎿  Added 3 lines
+      522                                       command=self.highlight_se
+           lection)
+      523          self.canvas_menu.add_command(label="Remove highlight",
+      524                                       command=self._remove_high
+           light_here)
+      525 +        self.canvas_menu.add_separator()                      
+      526 +        self.canvas_menu.add_command(label="Bookmark this page
+          +",                                                            
+      527 +                                     command=self.add_bookmark
+          +)                                                             
+      528          canvas_wrap.rowconfigure(0, weight=1)
+      529          canvas_wrap.columnconfigure(0, weight=1)
+      530          panes.add(right, weight=3)
+
+● Update(app.py)
+  ⎿  Added 4 lines
+      591          top.bind("<Control-s>",
+      592                   lambda e: (self.save_annotations(), "break")[
+           1])
+      593  
+      594 +        # Bookmark the current page.  _viewer_key (not a bare 
+          +bind): entries                                                
+      595 +        # have a default emacs Control-b binding we must not s
+          +hadow.                                                        
+      596 +        top.bind("<Control-b>", self._viewer_key(self.add_book
+          +mark))                                                        
+      597 +                                                              
+      598          # Content search: Ctrl+F focuses the box, F3 / Shift+F
+           3 step matches.
+      599          top.bind("<Control-f>",
+      600                   lambda e: (self.content_search_entry.focus_se
+           t(), "break")[1])
+
+● Now the tree population logic and the new bookmark methods:
+
+● Update(app.py)
+  ⎿  Added 1 line
+      1027      def load_topics(self, pdf_path: str) -> None:
+      1028          self._topic_entries = []
+      1029          self._topic_placeholder = None
+      1030 +        self._bookmarks = load_bookmarks(pdf_path)           
+      1031          metadata_path = find_metadata_path(pdf_path)
+      1032          if metadata_path is None:
+      1033              self._topic_placeholder = "(no metadata file foun
+            d)"
+
+● Update(app.py)
+  ⎿  Added 21 lines, removed 4 lines
+      1053          self._populate_topic_tree()
+      1054  
+      1055      def _populate_topic_tree(self) -> None:
+      1056 -        """Fill the topic tree from the loaded entries, honou
+           -ring the topic                                               
+      1057 -        search filter (substring match on the topic text only
+           -)."""                                                        
+      1056 +        """Fill the topic tree -- a Bookmarks section first, 
+           +then the loaded                                              
+      1057 +        topic entries -- honouring the topic search filter (s
+           +ubstring match                                               
+      1058 +        on the bookmark/topic text only)."""                 
+      1059          self.topic_tree.delete(*self.topic_tree.get_children(
+            ))
+      1060 +        needle = self.topic_filter_text.lower()              
+      1061 +                                                             
+      1062 +        # Bookmarks section.  Children keep their list index 
+           +in the iid so                                                
+      1063 +        # the right-click menu knows which bookmark it target
+           +s; the page in                                               
+      1064 +        # values rides the same click-to-jump path as topic r
+           +ows.                                                         
+      1065 +        bm_count = 0                                         
+      1066 +        for i, bm in enumerate(self._bookmarks):             
+      1067 +            if needle and needle not in bm["title"].lower(): 
+      1068 +                continue                                     
+      1069 +            if bm_count == 0:                                
+      1070 +                self.topic_tree.insert("", "end", iid="bm-roo
+           +t",                                                          
+      1071 +                                       text="Bookmarks", valu
+           +es=("",),                                                    
+      1072 +                                       open=True)            
+      1073 +            self.topic_tree.insert("bm-root", "end", iid=f"bm
+           +-{i}",                                                       
+      1074 +                                   text=bm["title"], values=(
+           +bm["page"],))                                                
+      1075 +            bm_count += 1                                    
+      1076 +                                                             
+      1077          if self._topic_placeholder is not None:
+      1078              self.topic_tree.insert(
+      1079                  "", "end", text=self._topic_placeholder, valu
+            es=("",))
+      1080              return
+      1081  
+      1064 -        needle = self.topic_filter_text.lower()              
+      1082          count = 0
+      1083          for topic, page in self._topic_entries:
+      1084              if needle and needle not in topic.lower():
+     ...
+      1088              self.topic_tree.insert("", "end", text=topic, val
+            ues=(page,))
+      1089              count += 1
+      1090  
+      1074 -        if count == 0 and needle:                            
+      1091 +        if count == 0 and bm_count == 0 and needle:          
+      1092              self.topic_tree.insert("", "end", text="(no match
+            es)", values=("",))
+      1093  
+      1094      def _on_topic_search_changed(self, *_args) -> None:
+
+● Now the add/rename/delete methods, inserted after _on_topic_search_changed:
+
+● Update(app.py)
+  ⎿  Added 57 lines
+      1095          self.topic_filter_text = self.topic_search_var.get().
+            strip()
+      1096          self._populate_topic_tree()
+      1097  
+      1098 +    # -- Bookmarks ------------------------------------------
+           +-------------------                                          
+      1099 +    def add_bookmark(self) -> None:                          
+      1100 +        """Bookmark the current page under a user-chosen name
+           +."""                                                         
+      1101 +        if self.doc is None or self.current_pdf_path is None:
+      1102 +            return                                           
+      1103 +        page = self.current_page + 1                         
+      1104 +        default = f"Page {page}"                             
+      1105 +        title = simpledialog.askstring("Add bookmark", "Bookm
+           +ark name:",                                                  
+      1106 +                                       initialvalue=default, 
+           +parent=self)                                                 
+      1107 +        if title is None:               # cancelled          
+      1108 +            return                                           
+      1109 +        title = title.strip() or default                     
+      1110 +        bookmark = {"page": page, "title": title}            
+      1111 +        self._bookmarks.append(bookmark)                     
+      1112 +        self._bookmarks.sort(key=lambda b: b["page"])        
+      1113 +        save_bookmarks(self.current_pdf_path, self._bookmarks
+           +)                                                            
+      1114 +        self._populate_topic_tree()                          
+      1115 +        self._select_bookmark_row(self._bookmarks.index(bookm
+           +ark))                                                        
+      1116 +                                                             
+      1117 +    def _select_bookmark_row(self, index: int) -> None:      
+      1118 +        """Highlight a bookmark's row so the user sees where 
+           +it landed (the                                               
+      1119 +        row may be filtered out, in which case do nothing).""
+           +"                                                            
+      1120 +        iid = f"bm-{index}"                                  
+      1121 +        if self.topic_tree.exists(iid):                      
+      1122 +            self.topic_tree.selection_set(iid)               
+      1123 +            self.topic_tree.see(iid)                         
+      1124 +                                                             
+      1125 +    def _on_topic_right_click(self, event) -> None:          
+      1126 +        iid = self.topic_tree.identify_row(event.y)          
+      1127 +        if not iid.startswith("bm-") or iid == "bm-root":    
+      1128 +            return                      # topics have no cont
+           +ext actions                                                  
+      1129 +        self._bm_menu_index = int(iid.split("-", 1)[1])      
+      1130 +        self.topic_tree.selection_set(iid)                   
+      1131 +        self.bookmark_menu.tk_popup(event.x_root, event.y_roo
+           +t)                                                           
+      1132 +                                                             
+      1133 +    def _rename_bookmark(self) -> None:                      
+      1134 +        i = self._bm_menu_index                              
+      1135 +        if i is None or not 0 <= i < len(self._bookmarks):   
+      1136 +            return                                           
+      1137 +        title = simpledialog.askstring("Rename bookmark", "Bo
+           +okmark name:",                                               
+      1138 +                                       initialvalue=self._boo
+           +kmarks[i]["title"],                                          
+      1139 +                                       parent=self)          
+      1140 +        if title is None or not title.strip():               
+      1141 +            return                                           
+      1142 +        self._bookmarks[i]["title"] = title.strip()          
+      1143 +        save_bookmarks(self.current_pdf_path, self._bookmarks
+           +)                                                            
+      1144 +        self._populate_topic_tree()                          
+      1145 +        self._select_bookmark_row(i)                         
+      1146 +                                                             
+      1147 +    def _delete_bookmark(self) -> None:                      
+      1148 +        i = self._bm_menu_index                              
+      1149 +        if i is None or not 0 <= i < len(self._bookmarks):   
+      1150 +            return                                           
+      1151 +        del self._bookmarks[i]                               
+      1152 +        save_bookmarks(self.current_pdf_path, self._bookmarks
+           +)                                                            
+      1153 +        self._populate_topic_tree()                          
+      1154 +                                                             
+      1155      # -- Content search (text of the open PDF) --------------
+            ------------------
+      1156      def _on_content_search_changed(self, *_args) -> None:
+      1157          # Debounce: searching every page on each keystroke wo
+            uld stutter.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(app.py)
+  ⎿  Added 9 lines
+      1443                          shutil.copyfile(meta, ann_meta)
+      1444                      except OSError:
+      1445                          pass              # copy still saved;
+             just no topics
+      1446 +            # ...and the same bookmarks sidecar, if any.     
+      1447 +            bm = bookmarks_path(src)                         
+      1448 +            if os.path.isfile(bm):                           
+      1449 +                ann_bm = bookmarks_path(ann_path)            
+      1450 +                if not os.path.exists(ann_bm):               
+      1451 +                    try:                                     
+      1452 +                        shutil.copyfile(bm, ann_bm)          
+      1453 +                    except OSError:                          
+      1454 +                        pass              # copy still saved;
+           + just no bookmarks                                           
+      1455              self.refresh_pdf_list()       # show the new (ann
+            ) file
+      1456          else:
+      1457              try:
+
+● Now the docs and installer version. Let me read them:
+
+  Read 3 files (ctrl+o to expand)
+
+● Update(installer.iss)
+  ⎿  Added 1 line, removed 1 line
+      3  ; Requires the app to be built first:  python -m PyInstaller PDF
+         Sherpa.spec
+      4  
+      5  #define AppName "PDF Sherpa"
+      6 -#define AppVersion "1.2.1"                                      
+      6 +#define AppVersion "1.3.0"                                      
+      7  #define AppExe "PDFSherpa.exe"
+      8  
+      9  [Setup]
+
+● Update(HELP.md)
+  ⎿  Added 14 lines
+      46  
+      47  Page numbers are **1-based** (page 1 is the first page).
+      48  
+      49 +## Bookmarks                                                   
+      50 +                                                               
+      51 +Mark your own places in a PDF: press `Ctrl+B` (or the **🔖** bu
+         +tton, or                                                       
+      52 +right-click the page and choose **Bookmark this page**) to book
+         +mark the page                                                  
+      53 +you're reading. Name it whatever you like — the suggested name 
+         +is just                                                        
+      54 +`Page N`. Your bookmarks appear in a **Bookmarks** section at t
+         +he top of the                                                  
+      55 +Topics pane; click one to jump to its page, right-click one to 
+         +**Rename** or                                                  
+      56 +**Delete** it. (These are separate from a PDF's built-in bookma
+         +rks, which feed                                                
+      57 +the topic list.)                                               
+      58 +                                                               
+      59 +Bookmarks are saved next to the PDF — `manual.pdf` gets        
+      60 +`manual.bookmarks.json` — so they travel with the folder and ar
+         +e easy to edit                                                 
+      61 +by hand. Deleting the last bookmark removes the file.          
+      62 +                                                               
+      63  ## Choosing a folder
+      64  
+      65  Use **Choose folder…** to point Sherpa at any folder of PDFs. I
+          t remembers
+
+● Update(HELP.md)
+  ⎿  Added 1 line
+      122  | + / = / - | Zoom in / out |
+      123  | W | Fit width |
+      124  | P | Full page |
+      125 +| Ctrl+B | Bookmark the current page |                        
+      126  | Ctrl+F | Focus the content search box |
+      127  | Ctrl+S | Save highlights to the PDF |
+      128  | F3 / Shift+F3 | Next / previous search match |
+
+● Update(README.md)
+  ⎿  Added 2 lines
+      16    and full-text search inside the open PDF with highlighted mat
+          ches.
+      17  - **Highlight text** — drag-select words on the page and save t
+          hem as real PDF
+      18    highlight annotations, into the original or an `(ann)` copy.
+      19 +- **Bookmarks** — mark pages with your own names (`Ctrl+B`); th
+         +ey show at the                                                 
+      20 +  top of the Topics pane and are saved beside the PDF in `name.
+         +bookmarks.json`.                                               
+      21  - **Drag & drop** — drop a PDF anywhere on the window to file i
+          t into an
+      22    `inbox` subfolder with an auto-generated topics file.
+      23  
+
+● Update(README.md)  ⎿  Added 6 lines
+      108    the topics file copied along — or writes into the original f
+           ile. Right-click
+      109    an existing highlight to remove it. Highlights are standard 
+           PDF annotations,
+      110    visible in any viewer.
+      111 +- **Bookmarks**: press `Ctrl+B` (or the **🔖** button, or righ
+          +t-click the page)                                             
+      112 +  to bookmark the current page under a name of your choice. Bo
+          +okmarks list in a                                             
+      113 +  **Bookmarks** section at the top of the Topics pane — click 
+          +to jump,                                                      
+      114 +  right-click to rename or delete. They live in a `name.bookma
+          +rks.json` sidecar                                             
+      115 +  next to the PDF, so they travel with the folder and can be h
+          +and-edited; an                                                
+      116 +  `(ann)` copy gets the sidecar copied along too.             
+      117  - **PDFs / Topics** toolbar toggles collapse the left and midd
+           le panes — hide
+      118    both for a full-width reading view. The choice persists acro
+           ss runs.
+      119  - **Full page** fits the whole page and resizes the window to 
+           hug it; dragging
+
+● Update(README.md)
+  ⎿  Added 1 line
+      156  | `+` / `=` / `−` | Zoom in / out |
+      157  | `W` | Fit width |
+      158  | `P` | Full page |
+      159 +| `Ctrl+B` | Bookmark the current page |                      
+      160  | `Ctrl+F` | Focus the content search box |
+      161  | `Ctrl+S` | Save highlights to the PDF |
+      162  | `F3` / `Shift+F3` | Next / previous search match |
+
+● Now verification — compile check plus a headless round-trip test of the
+  sidecar helpers:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Write(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-ab
+       5d-f18c405f59bd\scratchpad\test_bookmarks.py)
+  ⎿  Wrote 61 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Skill(verify)
+  ⎿  Successfully loaded skill
+
+● First, check for project verify/run skills:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Write(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-ab
+       5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Wrote 264 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Write(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-ab
+       5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 89 lines, removed 66 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All 23 checks pass. Let me look at the screenshots to confirm the UI actually
+  looks right:
+
+  Read 2 files (ctrl+o to expand)
+
+● Write(.claude\skills\verify\SKILL.md)
+  ⎿  Wrote 46 lines to .claude\skills\verify\SKILL.md
+      1 ---
+      2 name: verify
+      3 description: How to drive and verify the PDF Sherpa Tkinter GUI e
+        .
+      4 ---
+      5 
+      6 # Verifying PDF Sherpa changes
+      7 
+        est suite;
+      9 verification means launching the real GUI and driving it.
+     … +56 lines (ctrl+o to expand)
+
+● The per-PDF bookmarks feature is implemented, and I verified it end-to-end in
+  the real GUI.
+
+  What was built
+
+  Named bookmarks per PDF (version bumped to 1.3.0): press Ctrl+B, the new 🔖
+  nav button, or right-click the page → "Bookmark this page" to bookmark the
+  current page under a name of your choice (default "Page N"). Bookmarks appear
+  in a Bookmarks section at the top of the Topics pane — click to jump,
+  right-click to Rename/Delete — and are stored in a name.bookmarks.json sidecar
+  next to each PDF, so they travel with the folder and are hand-editable.
+  Deleting the last bookmark removes the file; saving an (ann) highlights copy
+  also copies the sidecar; the topic filter narrows bookmarks and topics
+  together. Changes: app.py (helpers, UI, shortcuts, tree integration), HELP.md,
+  README.md, installer.iss.
+
+  Verification: per-PDF named bookmarks in app.py
+
+  Verdict: PASS
+
+  Claim: Bookmark pages with editable names; list them above topics in the
+  Topics pane; persist in a per-PDF sidecar; jump on click; rename/delete via
+  context menu. Matches the diff (uncommitted, 4 files, +198/−7).
+
+  Method: Cold start (no project skills existed). Drove the real app — tk.Tk() +
+  PDFSherpaApp, same construction as main() — against a temp folder with a
+  fitz-generated 5-page PDF plus a .toc, with %APPDATA% redirected to a temp dir
+  so your real config was untouched. Real key events, real right-clicks at row
+  coordinates, and the real "Add bookmark" modal answered by typing into its
+  Entry and clicking its OK. Screenshots captured via Pillow. 23/23 checks
+  passed; also ran a headless round-trip suite on the sidecar helpers (sorting,
+  bad-entry skipping, corrupt JSON → warning + empty, empty list deletes the
+  file).
+
+  Steps
+
+  1. ✅ Opened the PDF, paged to 3 with arrow keys, pressed Ctrl+B → real modal
+  appeared prefilled "Page 3"; typed "Wiring diagram" → row under Bookmarks with
+  page 3, sidecar written with exactly that entry
+  2. ✅ Added a second bookmark on page 1 accepting the default → tree shows
+  [("Page 1", 1), ("Wiring diagram", 3)], sorted by page above the topics
+  3. ✅ Clicked bookmark row → jumped to page 3; clicked a topic row → still
+  jumps; clicked the "Bookmarks" header → inert
+  4. ✅ Right-clicked the bookmark row → context menu targeted the right entry;
+  Rename dialog prefilled with the old title; new title persisted to the sidecar
+  5. ✅ Deleted both bookmarks via the menu → section disappears and the sidecar
+  file is removed; re-added one, destroyed the app, relaunched → bookmark
+  restored from the sidecar
+  6. 🔍 Ctrl+B while focused in a search entry → no dialog, no bookmark (the
+  _viewer_key guard holds, and Tk's default Control-b entry binding isn't
+  shadowed)
+  7. 🔍 Filter "wir" → only the Wiring bookmark and no topics; "zzz" → single
+  "(no matches)" row; right-click on a topic row → inert
+  8. 🔍 PDF with no metadata file at all → shows ["Bookmarks", "(no metadata 
+  file found)"] in that order
+  9. 🔍 Headless: corrupt sidecar → warning + empty list; entries with page 0 or
+  blank titles are skipped on load; find_metadata_path never mistakes
+  .bookmarks.json for a topics file
+
+  Screenshot: captured at ...scratchpad\shots\05_tree_with_both.png — shows the
+  V1.3.0 title bar and the Bookmarks section sitting above Introduction/Advanced
+  Topics in the Topics pane.
+
+  Findings
+
+  - Renaming a bookmark re-selects its row, which rides the click-to-jump path —
+  so a rename also navigates to that bookmark's page. Harmless and arguably
+  nice, but it's a side effect you didn't ask for; say the word and I'll
+  suppress the jump on rename.
+  - Blank input behaves differently between add (falls back to "Page N") and
+  rename (aborts, keeps the old name). Deliberate — a blank rename shouldn't
+  silently retitle to nothing — but noting it.
+  - Pre-existing, unrelated: destroying a Tk root while the drag-drop poller has
+  a pending after prints invalid command name "..._poll_drop_queue" to stderr.
+  Invisible in normal use since the process exits with the window.
+
+  I also saved the GUI-driving recipe (APPDATA isolation, modal answering,
+  screenshot capture, gotchas) to .claude/skills/verify/SKILL.md so future
+  verifications skip the cold start. Nothing is committed — let me know if you'd
+  like a commit, or the rename-jump behavior changed.
+
+✻ Crunched for 16m 14s
+
+❯ run it                                                                        
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● PDF Sherpa is running — launched detached with your normal config, so it opens
+  your usual folder and last PDF. The window should show V1.3.0 in the title
+  bar.
+
+  To try the new feature: press Ctrl+B (or the 🔖 button next to Save, or
+  right-click the page) to bookmark the current page, then look for the
+  Bookmarks section at the top of the Topics pane — click one to jump,
+  right-click it to rename or delete. A name.bookmarks.json file appears next to
+  the PDF.
+
+✻ Baked for 16s
+※ recap: Added per-PDF named bookmarks to PDF Sherpa (Ctrl+B, Topics-pane section, sidecar JSON files), verified end-to-end, and launched the app for you to try. Next action: your feedback, then commit and optionally build the 1.3.0 installer. (disable recaps in /config)
+
+❯ if bookmarks are saved make the bookmarks section its own widget above topics 
+  using 25% of the vertical sapce                                               
+
+● I'll restructure the middle pane: a separate Bookmarks widget above Topics
+  that only appears when the PDF has bookmarks, holding 25% of the vertical
+  space (1:3 grid weights with a uniform group). First the UI build:
+
+● Update(app.py)
+  ⎿  Added 32 lines, removed 2 lines
+      380  
+      381          # 2. Topics
+      382          mid = ttk.Frame(panes)
+      383 -        ttk.Label(mid, text="Topics").pack(anchor="w")        
+      383 +        # Two stacked sections: Bookmarks (row 0, hidden until
+          + the PDF has                                                  
+      384 +        # bookmarks) over Topics (row 1).  The uniform group k
+          +eeps a fixed                                                  
+      385 +        # 1:3 split, so a visible Bookmarks list gets 25% of t
+          +he height.                                                    
+      386 +        mid.columnconfigure(0, weight=1)                      
+      387 +        mid.rowconfigure(0, weight=0, uniform="mid")          
+      388 +        mid.rowconfigure(1, weight=3, uniform="mid")          
+      389  
+      390 +        self._bm_frame = ttk.Frame(mid)                       
+      391 +        self._bm_frame.grid(row=0, column=0, sticky="nsew", pa
+          +dy=(0, 4))                                                    
+      392 +        self._bm_frame.grid_remove()                          
+      393 +        ttk.Label(self._bm_frame, text="Bookmarks").pack(ancho
+          +r="w")                                                        
+      394 +        bm_wrap = ttk.Frame(self._bm_frame)                   
+      395 +        bm_wrap.pack(side="top", fill="both", expand=True)    
+      396 +        self.bm_tree = ttk.Treeview(bm_wrap, columns=("page",)
+          +,                                                             
+      397 +                                    show="tree headings",     
+      398 +                                    selectmode="browse", heigh
+          +t=3)                                                          
+      399 +        self.bm_tree.heading("#0", text="Bookmark")           
+      400 +        self.bm_tree.heading("page", text="Page")             
+      401 +        self.bm_tree.column("#0", width=200, anchor="w")      
+      402 +        self.bm_tree.column("page", width=50, anchor="center",
+          + stretch=False)                                               
+      403 +        self.bm_tree.pack(side="left", fill="both", expand=Tru
+          +e)                                                            
+      404 +        bm_sb = ttk.Scrollbar(bm_wrap, orient="vertical",     
+      405 +                              command=self.bm_tree.yview)     
+      406 +        bm_sb.pack(side="right", fill="y")                    
+      407 +        self.bm_tree.config(yscrollcommand=bm_sb.set)         
+      408 +        self.bm_tree.bind("<<TreeviewSelect>>", self.on_bookma
+          +rk_selected)                                                  
+      409 +        self.bm_tree.bind("<Button-3>", self._on_bm_right_clic
+          +k)                                                            
+      410 +                                                              
+      411 +        topics = ttk.Frame(mid)                               
+      412 +        topics.grid(row=1, column=0, sticky="nsew")           
+      413 +        ttk.Label(topics, text="Topics").pack(anchor="w")     
+      414 +                                                              
+      415          # Search / filter box (filters the current PDF's topic
+           s only)
+      386 -        topic_search = ttk.Frame(mid)                         
+      416 +        topic_search = ttk.Frame(topics)                      
+      417          topic_search.pack(side="top", fill="x", pady=(0, 4))
+      418          ttk.Label(topic_search, text="🔍").pack(side="left")
+      419          self.topic_search_var = tk.StringVar()
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 1 line
+      425                     command=lambda: self.topic_search_var.set("
+           ")
+      426                     ).pack(side="left")
+      427  
+      428 -        topic_wrap = ttk.Frame(mid)                           
+      428 +        topic_wrap = ttk.Frame(topics)                        
+      429          topic_wrap.pack(side="top", fill="both", expand=True)
+      430          self.topic_tree = ttk.Treeview(topic_wrap, columns=("p
+           age",),
+      431                                         show="tree headings",
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 2 lines
+      440          topic_sb.pack(side="right", fill="y")
+      441          self.topic_tree.config(yscrollcommand=topic_sb.set)
+      442          self.topic_tree.bind("<<TreeviewSelect>>", self.on_top
+           ic_selected)
+      443 -        self.topic_tree.bind("<Button-3>", self._on_topic_righ
+          -t_click)                                                      
+      443  
+      445 -        # Right-click context menu for bookmark rows in the to
+          -pic tree                                                      
+      444 +        # Right-click context menu for rows in the bookmark li
+          +st                                                            
+      445          self.bookmark_menu = tk.Menu(self, tearoff=0)
+      446          self.bookmark_menu.add_command(label="Rename",
+      447                                         command=self._rename_bo
+           okmark)
+
+● Update(app.py)
+  ⎿  Added 21 lines, removed 21 lines
+      1082          self._populate_topic_tree()
+      1083  
+      1084      def _populate_topic_tree(self) -> None:
+      1085 -        """Fill the topic tree -- a Bookmarks section first, 
+           -then the loaded                                              
+      1086 -        topic entries -- honouring the topic search filter (s
+           -ubstring match                                               
+      1087 -        on the bookmark/topic text only)."""                 
+      1085 +        """Fill the topic tree from the loaded entries, honou
+           +ring the topic                                               
+      1086 +        search filter (substring match on the topic text only
+           +)."""                                                        
+      1087          self.topic_tree.delete(*self.topic_tree.get_children(
+            ))
+      1089 -        needle = self.topic_filter_text.lower()              
+      1090 -                                                             
+      1091 -        # Bookmarks section.  Children keep their list index 
+           -in the iid so                                                
+      1092 -        # the right-click menu knows which bookmark it target
+           -s; the page in                                               
+      1093 -        # values rides the same click-to-jump path as topic r
+           -ows.                                                         
+      1094 -        bm_count = 0                                         
+      1095 -        for i, bm in enumerate(self._bookmarks):             
+      1096 -            if needle and needle not in bm["title"].lower(): 
+      1097 -                continue                                     
+      1098 -            if bm_count == 0:                                
+      1099 -                self.topic_tree.insert("", "end", iid="bm-roo
+           -t",                                                          
+      1100 -                                       text="Bookmarks", valu
+           -es=("",),                                                    
+      1101 -                                       open=True)            
+      1102 -            self.topic_tree.insert("bm-root", "end", iid=f"bm
+           --{i}",                                                       
+      1103 -                                   text=bm["title"], values=(
+           -bm["page"],))                                                
+      1104 -            bm_count += 1                                    
+      1105 -                                                             
+      1088          if self._topic_placeholder is not None:
+      1089              self.topic_tree.insert(
+      1090                  "", "end", text=self._topic_placeholder, valu
+            es=("",))
+      1091              return
+      1092  
+      1093 +        needle = self.topic_filter_text.lower()              
+      1094          count = 0
+      1095          for topic, page in self._topic_entries:
+      1096              if needle and needle not in topic.lower():
+     ...
+      1100              self.topic_tree.insert("", "end", text=topic, val
+            ues=(page,))
+      1101              count += 1
+      1102  
+      1120 -        if count == 0 and bm_count == 0 and needle:          
+      1103 +        if count == 0 and needle:                            
+      1104              self.topic_tree.insert("", "end", text="(no match
+            es)", values=("",))
+      1105  
+      1106 +    def _populate_bookmark_tree(self) -> None:               
+      1107 +        """Fill the bookmark list and show/hide its section: 
+           +it only takes                                                
+      1108 +        space (25% of the middle pane, via the grid weights s
+           +et in _build_ui)                                             
+      1109 +        while the current PDF actually has bookmarks."""     
+      1110 +        self.bm_tree.delete(*self.bm_tree.get_children())    
+      1111 +        for i, bm in enumerate(self._bookmarks):             
+      1112 +            # The list index rides in the iid so the right-cl
+           +ick menu knows                                               
+      1113 +            # which bookmark it targets.                     
+      1114 +            self.bm_tree.insert("", "end", iid=f"bm-{i}",    
+      1115 +                                text=bm["title"], values=(bm[
+           +"page"],))                                                   
+      1116 +        if self._bookmarks:                                  
+      1117 +            self._mid_pane.rowconfigure(0, weight=1)         
+      1118 +            self._bm_frame.grid()                            
+      1119 +        else:                                                
+      1120 +            self._bm_frame.grid_remove()                     
+      1121 +            self._mid_pane.rowconfigure(0, weight=0)         
+      1122 +                                                             
+      1123      def _on_topic_search_changed(self, *_args) -> None:
+      1124          self.topic_filter_text = self.topic_search_var.get().
+            strip()
+      1125          self._populate_topic_tree()
+
+● Update(app.py)
+  ⎿  Added 1 line
+      1057          self._topic_entries = []
+      1058          self._topic_placeholder = None
+      1059          self._bookmarks = load_bookmarks(pdf_path)
+      1060 +        self._populate_bookmark_tree()                       
+      1061          metadata_path = find_metadata_path(pdf_path)
+      1062          if metadata_path is None:
+      1063              self._topic_placeholder = "(no metadata file foun
+            d)"
+
+● Now rework the bookmark methods to target the new tree, and add the selection
+  handler:
+
+● Update(app.py)
+  ⎿  Added 23 lines, removed 11 lines
+      1141          self._bookmarks.append(bookmark)
+      1142          self._bookmarks.sort(key=lambda b: b["page"])
+      1143          save_bookmarks(self.current_pdf_path, self._bookmarks
+            )
+      1144 -        self._populate_topic_tree()                          
+      1144 +        self._populate_bookmark_tree()                       
+      1145          self._select_bookmark_row(self._bookmarks.index(bookm
+            ark))
+      1146  
+      1147      def _select_bookmark_row(self, index: int) -> None:
+      1148 -        """Highlight a bookmark's row so the user sees where 
+           -it landed (the                                               
+      1149 -        row may be filtered out, in which case do nothing).""
+           -"                                                            
+      1148 +        """Highlight a bookmark's row so the user sees where 
+           +it landed."""                                                
+      1149          iid = f"bm-{index}"
+      1151 -        if self.topic_tree.exists(iid):                      
+      1152 -            self.topic_tree.selection_set(iid)               
+      1153 -            self.topic_tree.see(iid)                         
+      1150 +        if self.bm_tree.exists(iid):                         
+      1151 +            self.bm_tree.selection_set(iid)                  
+      1152 +            self.bm_tree.see(iid)                            
+      1153  
+      1155 -    def _on_topic_right_click(self, event) -> None:          
+      1156 -        iid = self.topic_tree.identify_row(event.y)          
+      1157 -        if not iid.startswith("bm-") or iid == "bm-root":    
+      1158 -            return                      # topics have no cont
+           -ext actions                                                  
+      1154 +    def on_bookmark_selected(self, _event=None) -> None:     
+      1155 +        selection = self.bm_tree.selection()                 
+      1156 +        if not selection:                                    
+      1157 +            return                                           
+      1158 +        values = self.bm_tree.item(selection[0], "values")   
+      1159 +        if not values or values[0] in ("", None):            
+      1160 +            return                                           
+      1161 +        try:                                                 
+      1162 +            page = int(values[0])                            
+      1163 +        except (ValueError, TypeError):                      
+      1164 +            return                                           
+      1165 +        self.goto_page(page - 1)        # bookmark pages are 
+           +1-based                                                      
+      1166 +                                                             
+      1167 +    def _on_bm_right_click(self, event) -> None:             
+      1168 +        iid = self.bm_tree.identify_row(event.y)             
+      1169 +        if not iid.startswith("bm-"):                        
+      1170 +            return                                           
+      1171          self._bm_menu_index = int(iid.split("-", 1)[1])
+      1160 -        self.topic_tree.selection_set(iid)                   
+      1172 +        self.bm_tree.selection_set(iid)                      
+      1173          self.bookmark_menu.tk_popup(event.x_root, event.y_roo
+            t)
+      1174  
+      1175      def _rename_bookmark(self) -> None:
+
+● Update(app.py)
+  ⎿  Added 2 lines, removed 2 lines
+      1183              return
+      1184          self._bookmarks[i]["title"] = title.strip()
+      1185          save_bookmarks(self.current_pdf_path, self._bookmarks
+            )
+      1186 -        self._populate_topic_tree()                          
+      1186 +        self._populate_bookmark_tree()                       
+      1187          self._select_bookmark_row(i)
+      1188  
+      1189      def _delete_bookmark(self) -> None:
+     ...
+      1192              return
+      1193          del self._bookmarks[i]
+      1194          save_bookmarks(self.current_pdf_path, self._bookmarks
+            )
+      1195 -        self._populate_topic_tree()                          
+      1195 +        self._populate_bookmark_tree()                       
+      1196  
+      1197      # -- Content search (text of the open PDF) --------------
+            ------------------
+      1198      def _on_content_search_changed(self, *_args) -> None:
+
+● Update(app.py)
+  ⎿  Added 2 lines, removed 2 lines
+      509          bookmark_btn.pack(side="left", padx=(4, 0))
+      510          _add_tooltip(bookmark_btn,
+      511                       "Bookmark the current page (Ctrl+B). Book
+           marks appear\n"
+      512 -                     "at the top of the Topics pane; right-cli
+          -ck one there\n"                                               
+      513 -                     "to rename or delete it.")               
+      512 +                     "in their own list above the Topics; righ
+          +t-click one\n"                                                
+      513 +                     "there to rename or delete it.")         
+      514          ttk.Button(nav, text="−",
+      515                     command=lambda: self.change_zoom(1 / ZOOM_S
+           TEP)
+      516                     ).pack(side="right")
+
+● Update(app.py)
+  ⎿  Added 2 lines, removed 2 lines
+      11  3. Clicking a topic/page opens the PDF (embedded viewer) at tha
+          t page.
+      12  4. Drop a PDF anywhere on the window to copy it into an 'inbox'
+           subfolder
+      13     of the current folder and auto-generate its .toc topics file
+          .
+      14 -5. Bookmark pages (Ctrl+B) with your own names; bookmarks show 
+         -at the top                                                     
+      15 -   of the Topics pane and are saved next to the PDF (name.bookm
+         -arks.json).                                                    
+      14 +5. Bookmark pages (Ctrl+B) with your own names; bookmarks show 
+         +in their own                                                   
+      15 +   list above the Topics and are saved next to the PDF (name.bo
+         +okmarks.json).                                                 
+      16  
+      17  Metadata file formats (auto-detected by extension, .toc preferr
+          ed):
+      18  
+
+● Update(HELP.md)
+  ⎿  Added 4 lines, removed 4 lines
+      51  Mark your own places in a PDF: press `Ctrl+B` (or the **🔖** bu
+          tton, or
+      52  right-click the page and choose **Bookmark this page**) to book
+          mark the page
+      53  you're reading. Name it whatever you like — the suggested name 
+          is just
+      54 -`Page N`. Your bookmarks appear in a **Bookmarks** section at t
+         -he top of the                                                  
+      55 -Topics pane; click one to jump to its page, right-click one to 
+         -**Rename** or                                                  
+      56 -**Delete** it. (These are separate from a PDF's built-in bookma
+         -rks, which feed                                                
+      57 -the topic list.)                                               
+      54 +`Page N`. Your bookmarks appear in their own **Bookmarks** list
+         + above the                                                     
+      55 +Topics (it only shows when the PDF has bookmarks); click one to
+         + jump to its                                                   
+      56 +page, right-click one to **Rename** or **Delete** it. (These ar
+         +e separate from                                                
+      57 +a PDF's built-in bookmarks, which feed the topic list.)        
+      58  
+      59  Bookmarks are saved next to the PDF — `manual.pdf` gets
+      60  `manual.bookmarks.json` — so they travel with the folder and ar
+          e easy to edit
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 2 lines
+      16    and full-text search inside the open PDF with highlighted mat
+          ches.
+      17  - **Highlight text** — drag-select words on the page and save t
+          hem as real PDF
+      18    highlight annotations, into the original or an `(ann)` copy.
+      19 -- **Bookmarks** — mark pages with your own names (`Ctrl+B`); th
+         -ey show at the                                                 
+      20 -  top of the Topics pane and are saved beside the PDF in `name.
+         -bookmarks.json`.                                               
+      19 +- **Bookmarks** — mark pages with your own names (`Ctrl+B`); th
+         +ey show in                                                     
+      20 +  their own list above the Topics and are saved beside the PDF 
+         +in                                                             
+      21 +  `name.bookmarks.json`.                                       
+      22  - **Drag & drop** — drop a PDF anywhere on the window to file i
+          t into an
+      23    `inbox` subfolder with an auto-generated topics file.
+      24  
+
+● Update(README.md)
+  ⎿  Added 6 lines, removed 5 lines
+      110    an existing highlight to remove it. Highlights are standard 
+           PDF annotations,
+      111    visible in any viewer.
+      112  - **Bookmarks**: press `Ctrl+B` (or the **🔖** button, or righ
+           t-click the page)
+      113 -  to bookmark the current page under a name of your choice. Bo
+          -okmarks list in a                                             
+      114 -  **Bookmarks** section at the top of the Topics pane — click 
+          -to jump,                                                      
+      115 -  right-click to rename or delete. They live in a `name.bookma
+          -rks.json` sidecar                                             
+      116 -  next to the PDF, so they travel with the folder and can be h
+          -and-edited; an                                                
+      117 -  `(ann)` copy gets the sidecar copied along too.             
+      113 +  to bookmark the current page under a name of your choice. Bo
+          +okmarks get                                                   
+      114 +  their own list above the Topics (shown only when the PDF has
+          + bookmarks,                                                   
+      115 +  using the top quarter of the pane) — click to jump, right-cl
+          +ick to rename or                                              
+      116 +  delete. They live in a `name.bookmarks.json` sidecar next to
+          + the PDF, so                                                  
+      117 +  they travel with the folder and can be hand-edited; an `(ann
+          +)` copy gets the                                              
+      118 +  sidecar copied along too.                                   
+      119  - **PDFs / Topics** toolbar toggles collapse the left and midd
+           le panes — hide
+      120    both for a full-width reading view. The choice persists acro
+           ss runs.
+      121  - **Full page** fits the whole page and resizes the window to 
+           hug it; dragging
+
+● Write(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-ab
+       5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 88 lines, removed 100 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 7 lines (ctrl+o to expand)
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Done — bookmarks now live in their own widget above Topics, and the updated
+  app is running.
+
+  What changed (all in app.py, plus doc wording in HELP.md/README.md):
+
+  - The middle pane is now a two-row grid: a Bookmarks section (own label, own
+  tree with Bookmark/Page columns, own scrollbar) above the existing Topics
+  section. A uniform grid group pins the split to 1:3, so bookmarks get 25% of 
+  the vertical space — measured 0.24 in the live window.
+  - The section only appears when the current PDF has saved bookmarks: it shows
+  the moment you add the first one, hides when you delete the last or switch to
+  a PDF without any.
+  - Click a bookmark to jump; right-click for Rename/Delete — all moved to the
+  new list. The Topics tree is back to topics only, and its filter box no longer
+  touches bookmarks (they're a separate widget now, and typically short).
+  - Everything else is unchanged: Ctrl+B / 🔖 / canvas right-click to add,
+  sidecar name.bookmarks.json storage, restart persistence.
+
+  Verified by driving the real GUI again — 18/18 checks including: widget hidden
+  on a bookmark-less PDF, appears on first add at ~25% height, sorted rows,
+  click-to-jump for both lists, rename/delete via real right-click, hides after
+  deleting all, survives an app restart, and correct behavior on a PDF with no
+  .toc at all.
+
+  One thing to know: since the Bookmarks list lives in the middle pane, hiding
+  the Topics pane with the toolbar toggle hides your bookmarks too. If you'd
+  rather bookmarks survive that toggle (or want the 25% split user-draggable via
+  a sash), say the word. Nothing is committed yet.
+
+✻ Brewed for 5m 2s
+
+❯ make the 25% draggable. If no bookmarks are present then the topics widget    
+  should be full height                                                         
+
+● I'll swap the fixed grid split for a vertical ttk.PanedWindow — draggable
+  sash, 25% starting position, bookmarks pane removed entirely (Topics full
+  height) when there are none. First the layout:
+
+● Update(app.py)
+  ⎿  Added 8 lines, removed 9 lines
+      380  
+      381          # 2. Topics
+      382          mid = ttk.Frame(panes)
+      383 -        # Two stacked sections: Bookmarks (row 0, hidden until
+          - the PDF has                                                  
+      384 -        # bookmarks) over Topics (row 1).  The uniform group k
+          -eeps a fixed                                                  
+      385 -        # 1:3 split, so a visible Bookmarks list gets 25% of t
+          -he height.                                                    
+      386 -        mid.columnconfigure(0, weight=1)                      
+      387 -        mid.rowconfigure(0, weight=0, uniform="mid")          
+      388 -        mid.rowconfigure(1, weight=3, uniform="mid")          
+      383 +        # Vertical split: Bookmarks over Topics, with a dragga
+          +ble sash.  The                                                
+      384 +        # Bookmarks pane is only attached while the PDF has bo
+          +okmarks (it                                                   
+      385 +        # starts at 25% of the height); otherwise Topics takes
+          + it all.                                                      
+      386 +        self._mid_split = ttk.PanedWindow(mid, orient="vertica
+          +l")                                                           
+      387 +        self._mid_split.pack(fill="both", expand=True)        
+      388  
+      390 -        self._bm_frame = ttk.Frame(mid)                       
+      391 -        self._bm_frame.grid(row=0, column=0, sticky="nsew", pa
+          -dy=(0, 4))                                                    
+      392 -        self._bm_frame.grid_remove()                          
+      389 +        self._bm_frame = ttk.Frame(self._mid_split)           
+      390 +        # Not added to the split here -- _populate_bookmark_tr
+          +ee attaches and                                               
+      391 +        # detaches it as bookmarks come and go.               
+      392          ttk.Label(self._bm_frame, text="Bookmarks").pack(ancho
+           r="w")
+      393          bm_wrap = ttk.Frame(self._bm_frame)
+      394          bm_wrap.pack(side="top", fill="both", expand=True)
+
+● Update(app.py)
+  ⎿  Added 2 lines, removed 2 lines
+      407          self.bm_tree.bind("<<TreeviewSelect>>", self.on_bookma
+           rk_selected)
+      408          self.bm_tree.bind("<Button-3>", self._on_bm_right_clic
+           k)
+      409  
+      410 -        topics = ttk.Frame(mid)                               
+      411 -        topics.grid(row=1, column=0, sticky="nsew")           
+      410 +        topics = ttk.Frame(self._mid_split)                   
+      411 +        self._mid_split.add(topics, weight=3)                 
+      412          ttk.Label(topics, text="Topics").pack(anchor="w")
+      413  
+      414          # Search / filter box (filters the current PDF's topic
+           s only)
+
+● Update(app.py)
+  ⎿  Added 3 lines
+      249          # the list index targeted by the tree's right-click me
+           nu.
+      250          self._bookmarks: list[dict] = []
+      251          self._bm_menu_index: int | None = None
+      252 +        # Where the user last dragged the bookmarks/topics sas
+          +h (pixels);                                                   
+      253 +        # None until dragged, meaning "use the default 25%".  
+      254 +        self._bm_sash: int | None = None                      
+      255          # Content search over the open PDF: (page_index, fitz.
+           Rect) per hit.
+      256          # The scan runs in chunks on the Tk event loop so big 
+           documents don't
+      257          # freeze the UI; matches/label fill in progressively.
+
+● Now the show/hide logic with sash placement and memory:
+
+● Update(app.py)
+  ⎿  Added 22 lines, removed 9 lines
+      1107              self.topic_tree.insert("", "end", text="(no match
+            es)", values=("",))
+      1108  
+      1109      def _populate_bookmark_tree(self) -> None:
+      1110 -        """Fill the bookmark list and show/hide its section: 
+           -it only takes                                                
+      1111 -        space (25% of the middle pane, via the grid weights s
+           -et in _build_ui)                                             
+      1112 -        while the current PDF actually has bookmarks."""     
+      1110 +        """Fill the bookmark list and attach/detach its pane:
+           + while the PDF                                               
+      1111 +        has bookmarks it sits above the topics behind a dragg
+           +able sash;                                                   
+      1112 +        without any, Topics takes the full height."""        
+      1113          self.bm_tree.delete(*self.bm_tree.get_children())
+      1114          for i, bm in enumerate(self._bookmarks):
+      1115              # The list index rides in the iid so the right-cl
+            ick menu knows
+      1116              # which bookmark it targets.
+      1117              self.bm_tree.insert("", "end", iid=f"bm-{i}",
+      1118                                  text=bm["title"], values=(bm[
+            "page"],))
+      1119 -        if self._bookmarks:                                  
+      1120 -            self._mid_pane.rowconfigure(0, weight=1)         
+      1121 -            self._bm_frame.grid()                            
+      1122 -        else:                                                
+      1123 -            self._bm_frame.grid_remove()                     
+      1124 -            self._mid_pane.rowconfigure(0, weight=0)         
+      1119 +        shown = str(self._bm_frame) in self._mid_split.panes(
+           +)                                                            
+      1120 +        if self._bookmarks and not shown:                    
+      1121 +            self._mid_split.insert(0, self._bm_frame, weight=
+           +1)                                                           
+      1122 +            self.after_idle(self._place_bm_sash)             
+      1123 +        elif not self._bookmarks and shown:                  
+      1124 +            self._bm_sash = self._mid_split.sashpos(0)  # kee
+           +p the dragged spot                                           
+      1125 +            self._mid_split.forget(self._bm_frame)           
+      1126  
+      1127 +    def _place_bm_sash(self) -> None:                        
+      1128 +        """Put the bookmarks/topics sash where the user last 
+           +dragged it, or                                               
+      1129 +        at 25% of the split's height the first time the pane 
+           +appears."""                                                  
+      1130 +        if str(self._bm_frame) not in self._mid_split.panes()
+           +:                                                            
+      1131 +            return                                           
+      1132 +        height = self._mid_split.winfo_height()              
+      1133 +        if height <= 1:                   # split not laid ou
+           +t yet; retry                                                 
+      1134 +            self.after(50, self._place_bm_sash)              
+      1135 +            return                                           
+      1136 +        pos = self._bm_sash if self._bm_sash is not None else
+           + height // 4                                                 
+      1137 +        self._mid_split.sashpos(0, max(40, min(pos, height - 
+           +80)))                                                        
+      1138 +                                                             
+      1139      def _on_topic_search_changed(self, *_args) -> None:
+      1140          self.topic_filter_text = self.topic_search_var.get().
+            strip()
+      1141          self._populate_topic_tree()
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 3 lines
+      111    visible in any viewer.
+      112  - **Bookmarks**: press `Ctrl+B` (or the **🔖** button, or righ
+           t-click the page)
+      113    to bookmark the current page under a name of your choice. Bo
+           okmarks get
+      114 -  their own list above the Topics (shown only when the PDF has
+          - bookmarks,                                                   
+      115 -  using the top quarter of the pane) — click to jump, right-cl
+          -ick to rename or                                              
+      116 -  delete. They live in a `name.bookmarks.json` sidecar next to
+          - the PDF, so                                                  
+      114 +  their own list above the Topics (shown only when the PDF has
+          + bookmarks; it                                                
+      115 +  starts at a quarter of the pane and the divider is draggable
+          +) — click to                                                  
+      116 +  jump, right-click to rename or delete. They live in a `name.
+          +bookmarks.json` sidecar next to the PDF, so                   
+      117    they travel with the folder and can be hand-edited; an `(ann
+           )` copy gets the
+      118    sidecar copied along too.
+      119  - **PDFs / Topics** toolbar toggles collapse the left and midd
+           le panes — hide
+
+● Update(HELP.md)
+  ⎿  Added 2 lines, removed 1 line
+      52  right-click the page and choose **Bookmark this page**) to book
+          mark the page
+      53  you're reading. Name it whatever you like — the suggested name 
+          is just
+      54  `Page N`. Your bookmarks appear in their own **Bookmarks** list
+           above the
+      55 -Topics (it only shows when the PDF has bookmarks); click one to
+         - jump to its                                                   
+      55 +Topics — it only shows when the PDF has bookmarks, and you can 
+         +drag the                                                       
+      56 +divider between the two lists to resize it. Click a bookmark to
+         + jump to its                                                   
+      57  page, right-click one to **Rename** or **Delete** it. (These ar
+          e separate from
+      58  a PDF's built-in bookmarks, which feed the topic list.)
+      59  
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 7 lines, removed 2 lines (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 2 lines, removed 1 line (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 7 lines, removed 7 lines (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 25 lines, removed 4 lines (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 2 lines, removed 2 lines (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 2 lines, removed 2 lines (ctrl+o to expand)
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 2 lines, removed 2 lines (ctrl+o to expand)
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Done, and the updated app is running (close any older window from before).
+
+  The fixed 25% grid split is now a vertical ttk.PanedWindow inside the middle
+  pane:
+
+  - Draggable: a real sash sits between Bookmarks and Topics — grab it to
+  resize. It starts at 25% the first time the pane appears, and if you drag it,
+  that position is remembered for the rest of the session (it comes back at your
+  spot even after the pane hides and reappears).
+  - Full-height Topics when empty: with no bookmarks, the Bookmarks pane isn't
+  just zero-height — it's detached from the split entirely, so Topics is the
+  only pane and takes all the vertical space. It attaches the moment you add a
+  first bookmark and detaches when you delete the last.
+
+  Verified by driving the real GUI: 21/21 checks, including sash at ratio 0.25
+  on first show, programmatic drag to 300px sticking, position restored after
+  delete-all → re-add, Topics as the sole full-height pane on bookmark-less
+  PDFs, plus all the earlier regression checks (add/rename/delete, click-to-jump
+  for both lists, restart persistence, sidecar create/remove). The screenshot
+  above shows the enlarged Bookmarks list after the drag, with Topics compressed
+  below it.
+
+  Everything is still uncommitted — say the word when you want it committed (and
+  whether to build the installer for a 1.3.0 release).
+
+✻ Churned for 2m 55s
+
+※ recap: Adding per-PDF named bookmarks to PDF Sherpa (v1.3.0): sidecar JSON storage, draggable Bookmarks pane above Topics, all GUI-verified 21/21 and running. Next action: commit the changes when you give the go-ahead. (disable recaps in /config)
+
+❯ rebuild the exe and instalelr, update all docs and commit                     
+
+  Recalled 1 memory (ctrl+o to expand)
+
+● Update(HELP.md)
+  ⎿  Added 3 lines, removed 1 line
+      11  - **PDFs** (left) — every PDF found under the current folder, g
+          rouped by
+      12    subfolder. Click one to open it. The search box filters the l
+          ist as you type.
+      13  - **Topics** (middle) — the selected PDF's topic list. Click a 
+          topic to jump
+      14 -  straight to that page. The search box filters the topics as y
+         -ou type.                                                       
+      14 +  straight to that page. The search box filters the topics as y
+         +ou type. If the                                                
+      15 +  PDF has bookmarks, they appear in their own list above the to
+         +pics (see                                                      
+      16 +  **Bookmarks** below).                                        
+      17  - **Viewer** (right) — the embedded page view, with a search bo
+          x that finds
+      18    text inside the open PDF (see **Searching** below).
+      19  
+
+● Update(README.md)
+  ⎿  Added 2 lines, removed 1 line
+      10  
+      11  - **Left pane** — lists every PDF in a subfolder (default `./pd
+          fs`).
+      12  - **Middle pane** — when you select a PDF, shows the topics and
+           page numbers from
+      13 -  its companion metadata file (same base name, `.toc` or `.json
+         -`).                                                            
+      13 +  its companion metadata file (same base name, `.toc` or `.json
+         +`), with your                                                  
+      14 +  own bookmarks in a resizable list above them.                
+      15  - **Right pane** — an embedded viewer. Click a topic and the PD
+          F jumps to that page.
+      16  - **Search everywhere** — filter the PDF list by name, filter t
+          he topic list,
+      17    and full-text search inside the open PDF with highlighted mat
+          ches.
+
+● Now build the exe (stopping any running PDFSherpa.exe first, per the build
+  notes):
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● While that builds, let me check why the new .claude/skills file isn't showing
+  in git status:
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Background command "Build one-file exe with PyInstaller" completed (exit code
+0)
+
+● Exe built (52.6 MB, fresh timestamp). Now the installer:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Installer compiled. Quick smoke test that the packaged exe actually launches
+  (PyInstaller can miss imports), then commit:
+
+  Committed 2576e6b, ran 1 shell command (ctrl+o to expand)
+
+● All done — built, documented, and committed.
+
+  - Exe: dist\PDFSherpa.exe rebuilt with PyInstaller (52.6 MB), smoke-tested —
+  it launches and the title reads "PDF Sherpa - V1.3.0". (I stopped the running
+  instances first, including the older installed copy.)
+  - Installer: installer\PDFSherpa-Setup.exe compiled cleanly with Inno Setup,
+  picking up AppVersion 1.3.0.
+  - Docs: HELP.md (three-panes description, new Bookmarks section, Ctrl+B in the
+  shortcuts table), README.md (feature bullets, middle-pane description,
+  shortcuts table), and the app.py module docstring all describe the final
+  behavior — resizable Bookmarks list above Topics, sidecar storage, full-height
+  Topics when there are no bookmarks.
+  - Commit: 2576e6b "Add per-PDF named bookmarks (v1.3.0)" — app.py, HELP.md,
+  README.md, installer.iss (+262/−8). The .claude/ verify skill stayed out since
+  that directory is gitignored in this repo.
+
+  Not done, since you didn't ask: the commit isn't pushed, and no GitHub release
+  exists yet. When you're ready to ship, it's git push then gh release create 
+  v1.3.0 installer\PDFSherpa-Setup.exe (the installer is gitignored by design
+  and ships only as a release asset).
+
+✻ Crunched for 2m 27s
+
+❯ run the installer on this PC                                                  
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+❯ commit, push and update releases                                              
+  Ran 3 shell commands (ctrl+o to expand)
+
+● The remote has one commit I don't have — "Update README.md" (9db6d22), likely
+  edited on GitHub directly. Let me see what it changed, then rebase my commit
+  on top:
+
+  Pushed to main, ran 4 shell commands, wrote 1 memory (ctrl+o to expand)
+
+● Everything is shipped:
+
+  - Installed on this PC: the silent install ran and the installed copy launched
+  fine — "PDF Sherpa - V1.3.0" is running now, pointed at your
+  J:\Dropbox\03_Work\N05_PublishedDocs folder.
+  - Commit: nothing new needed committing; the bookmarks commit was already
+  made. The push was initially rejected because you'd added a Screenshot section
+  to the README on GitHub — I rebased on top of it (clean merge, README keeps
+  both your screenshot and the bookmarks docs) and pushed. Main is now c332ab5
+  on the remote.
+  - Release: published v1.3.0 at
+  https://github.com/Flinterpop/PDF_Sherpa/releases/tag/v1.3.0 with
+  PDFSherpa-Setup.exe (54 MB) attached and notes describing the bookmarks
+  feature.
+
+  One heads-up: because I rebased, the local commit hash changed from 2576e6b to
+  c332ab5 — the release notes link points at the correct final hash.
+
+✻ Sautéed for 2m 22s
+
+❯ anything else?                                                                
+
+● Nothing outstanding — the feature is built, verified, committed, pushed,
+  released, and installed. A few small things you might care about, none
+  blocking:
+
+  - Stray windows: earlier I launched the app twice from source (python app.py)
+  before you asked for the installer. If any of those windows are still open,
+  just close them — the installed V1.3.0 is the one to keep using.
+  - Rename jumps: renaming a bookmark also navigates to its page (a side effect
+  of re-selecting the row). Harmless, but say the word if you'd rather it stay
+  put.
+  - Possible polish later, only if you find you want it: remembering the sash
+  position across app runs (it's session-only now), a Delete-key shortcut on
+  bookmark rows, and the fact that collapsing the Topics pane hides bookmarks
+  with it.
+
+  Otherwise you're done — main is at c332ab5, v1.3.0 is live on GitHub with the
+  installer attached, and the installed copy is running against your Dropbox
+  folder.
+
+✻ Cogitated for 13s
+
+❯ what is sash position                                                         
+
+● The sash is the draggable divider between the Bookmarks list and the Topics
+  list in the middle pane — the thin horizontal bar you can grab with the mouse
+  to resize the two lists. "Sash" is just Tk's (the GUI toolkit's) name for the
+  drag handle in a split pane; the same thing exists between the three main
+  panes (PDFs / Topics / Viewer), vertically.
+
+  The sash position is where that divider currently sits, in pixels from the
+  top. When a PDF's bookmarks first appear, the app places it at 25% of the pane
+  height. If you drag it — say you pull it down to give bookmarks half the
+  space — the app remembers that pixel position and puts the divider back there
+  whenever the Bookmarks list reappears (after switching PDFs, or after deleting
+  all bookmarks and adding one again).
+
+  What I meant by "session-only" in the last message: that remembered position
+  lives in memory, not in the config file, so when you close and relaunch the
+  app the divider resets to the 25% default. If that bothers you, it's a
+  two-line change to save it in %APPDATA%\PDFGuide\config.json alongside the
+  window geometry.
+
+✻ Brewed for 9s
+
+❯ make the sash position persist across runs                                    
+
+● Let me look at the app's close handler where geometry is already persisted:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Update(app.py)
+  ⎿  Added 6 lines, removed 3 lines
+      249          # the list index targeted by the tree's right-click me
+           nu.
+      250          self._bookmarks: list[dict] = []
+      251          self._bm_menu_index: int | None = None
+      252 -        # Where the user last dragged the bookmarks/topics sas
+          -h (pixels);                                                   
+      253 -        # None until dragged, meaning "use the default 25%".  
+      254 -        self._bm_sash: int | None = None                      
+      252 +        # Where the user last dragged the bookmarks/topics sas
+          +h (pixels).                                                   
+      253 +        # Persisted across runs; None means "use the default 2
+          +5%".                                                          
+      254 +        saved_sash = load_config().get("bm_sash")             
+      255 +        self._bm_sash: int | None = (                         
+      256 +            saved_sash if isinstance(saved_sash, int) and save
+          +d_sash > 0                                                    
+      257 +            else None)                                        
+      258          # Content search over the open PDF: (page_index, fitz.
+           Rect) per hit.
+      259          # The scan runs in chunks on the Tk event loop so big 
+           documents don't
+      260          # freeze the UI; matches/label fill in progressively.
+
+● Update(app.py)
+  ⎿  Added 6 lines, removed 1 line
+      1054  
+      1055      def _on_close(self) -> None:
+      1056          self._maybe_save_annots()
+      1057 -        update_config({"geometry": self.winfo_toplevel().geom
+           -etry()})                                                     
+      1057 +        if str(self._bm_frame) in self._mid_split.panes():   
+      1058 +            self._bm_sash = self._mid_split.sashpos(0)       
+      1059 +        updates = {"geometry": self.winfo_toplevel().geometry
+           +()}                                                          
+      1060 +        if self._bm_sash is not None:                        
+      1061 +            updates["bm_sash"] = self._bm_sash               
+      1062 +        update_config(updates)                               
+      1063          self.winfo_toplevel().destroy()
+      1064  
+      1065      # -- Topics ---------------------------------------------
+            ------------------
+
+● Update(HELP.md)
+  ⎿  Added 2 lines, removed 1 line
+      55  you're reading. Name it whatever you like — the suggested name 
+          is just
+      56  `Page N`. Your bookmarks appear in their own **Bookmarks** list
+           above the
+      57  Topics — it only shows when the PDF has bookmarks, and you can 
+          drag the
+      58 -divider between the two lists to resize it. Click a bookmark to
+         - jump to its                                                   
+      58 +divider between the two lists to resize it (the position is rem
+         +embered                                                        
+      59 +across runs). Click a bookmark to jump to its                  
+      60  page, right-click one to **Rename** or **Delete** it. (These ar
+          e separate from
+      61  a PDF's built-in bookmarks, which feed the topic list.)
+      62  
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 2 lines
+      117  - **Bookmarks**: press `Ctrl+B` (or the **🔖** button, or righ
+           t-click the page)
+      118    to bookmark the current page under a name of your choice. Bo
+           okmarks get
+      119    their own list above the Topics (shown only when the PDF has
+            bookmarks; it
+      120 -  starts at a quarter of the pane and the divider is draggable
+          -) — click to                                                  
+      121 -  jump, right-click to rename or delete. They live in a `name.
+          -bookmarks.json` sidecar next to the PDF, so                   
+      120 +  starts at a quarter of the pane and the divider is draggable
+          +, with the                                                    
+      121 +  position remembered across runs) — click to jump, right-clic
+          +k to rename or                                                
+      122 +  delete. They live in a `name.bookmarks.json` sidecar next to
+          + the PDF, so                                                  
+      123    they travel with the folder and can be hand-edited; an `(ann
+           )` copy gets the
+      124    sidecar copied along too.
+      125  - **PDFs / Topics** toolbar toggles collapse the left and midd
+           le panes — hide
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)  ⎿  Added 7 lines, removed 2 lines (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 4 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\drive_app.py)
+  ⎿  Added 7 lines, removed 3 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Done — the sash position now survives restarts. Verified end-to-end: 23/23
+  checks in the live GUI, including the new ones — dragging the sash to 300px,
+  closing via the real window-close path writes bm_sash: 300 to
+  %APPDATA%\PDFGuide\config.json (alongside the geometry it already saved
+  there), and a fresh app process restores the divider at exactly 300px when the
+  bookmarks pane appears.
+
+  How it works: _on_close captures the current sash position (or the last one
+  remembered from a hidden pane) and merges it into the config; startup reads it
+  back, and the existing clamp logic protects against stale values if the
+  window is smaller next run. The 25% default still applies for anyone who's
+  never dragged it. HELP.md and README.md mention the remembered position.
+
+  This change is in the working tree only — the v1.3.0 release you published
+  doesn't include it. When you're ready I can bump to 1.3.1, rebuild the exe and
+  installer, commit/push, and update the release — just say so.
+
+✻ Sautéed for 2m 36s
+
+❯ update help for new features                                                  
+
+● HELP.md already documents most of the new features (I updated it as I went),
+  but let me scan for gaps — one I know of: the Highlighting section still says
+  only the topics file is copied with an (ann) copy, and the bookmarks paragraph
+  got choppy through incremental edits. Fixing both:
+
+● Update(HELP.md)
+  ⎿  Error editing file
+
+● Update(HELP.md)
+  ⎿  Error editing file
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(HELP.md)
+  ⎿  Added 1 line, removed 1 line
+      72  selection**. Highlights are standard PDF annotations, so they s
+          how up in any PDF viewer.
+      73  
+      74  Changes are kept in memory until you save. The **Save** button 
+          (or `Ctrl+S`) asks where to put them: **Yes** saves an annotate
+          d copy alongside the
+      75 -original — `manual.pdf` becomes `manual(ann).pdf`, with the top
+         -ics file copied too — while **No** writes into the original fil
+         -e. Saving while                                                
+      75 +original — `manual.pdf` becomes `manual(ann).pdf`, with the top
+         +ics and bookmarks files copied too — while **No** writes into t
+         +he original file. Saving while                                 
+      76  viewing an `(ann)` copy just updates it, no questions asked. If
+           you switch PDFs or close the app with unsaved highlights, Sher
+          pa asks whether to save
+      77  them. To remove a highlight, right-click it and choose **Remove
+           highlight**, then save.
+      78  
+
+● Update(HELP.md)
+  ⎿  Added 7 lines, removed 4 lines
+      41  ## Bookmarks
+      42  
+      43  Mark your own places in a PDF: press `Ctrl+B` (or the **🔖** bu
+          tton, or right-click the page and choose **Bookmark this page**
+          ) to bookmark the page
+      44 -you're reading. Name it whatever you like — the suggested name 
+         -is just `Page N`. Your bookmarks appear in their own **Bookmark
+         -s** list above the                                             
+      45 -Topics — it only shows when the PDF has bookmarks, and you can 
+         -drag the divider between the two lists to resize it (the positi
+         -on is remembered                                               
+      46 -across runs). Click a bookmark to jump to its page, right-click
+         - one to **Rename** or **Delete** it. (These are separate from a
+         - PDF's built-in bookmarks, which feed the topic list.)         
+      44 +you're reading. Name it whatever you like — the suggested name 
+         +is just `Page N`.                                              
+      45  
+      46 +Your bookmarks appear in their own **Bookmarks** list above the
+         + Topics. Click a bookmark to jump to its page; right-click one 
+         +to **Rename** or                                               
+      47 +**Delete** it. The list only appears when the PDF has bookmarks
+         + — otherwise the Topics take the full height — and you can drag
+         + the divider between                                           
+      48 +the two lists to resize them (the divider position is remembere
+         +d across runs). These are separate from a PDF's built-in bookma
+         +rks, which feed the                                            
+      49 +topic list.                                                    
+      50 +                                                               
+      51  Bookmarks are saved next to the PDF — `manual.pdf` gets `manual
+          .bookmarks.json` — so they travel with the folder and are easy 
+          to edit
+      49 -by hand. Deleting the last bookmark removes the file.          
+      52 +by hand. Deleting the last bookmark removes the file, and savin
+         +g highlights as an `(ann)` copy carries the bookmarks along.   
+      53  
+      54  ## Choosing a folder
+      55  
+
+● HELP.md is rendered by the app's own markdown renderer, so let me quickly
+  confirm the updated file renders cleanly in the real Help window:
+
+● Write(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-ab
+       5d-f18c405f59bd\scratchpad\check_help.py)
+  ⎿  Wrote 37 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-a
+        b5d-f18c405f59bd\scratchpad\check_help.py)
+  ⎿  Added 8 lines, removed 4 lines (ctrl+o to expand)
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Help is updated and renders cleanly in the app's Help window (verified with a
+  live render — headings, bold, and inline code all styled correctly).
+
+  What changed in HELP.md:
+
+  - Bookmarks section restructured into three clear paragraphs: how to add
+  (Ctrl+B / 🔖 / right-click), how the list behaves (click to jump, right-click
+  Rename/Delete, appears only when the PDF has bookmarks with Topics taking full
+  height otherwise, draggable divider remembered across runs), and how they're
+  stored (sidecar file, deleted with the last bookmark, carried along with (ann)
+  copies).
+  - Highlighting section fixed: saving an annotated copy now says "with the
+  topics and bookmarks files copied too" — it previously mentioned only the
+  topics file.
+
+  I kept the rewrapped long-line formatting you gave the file. Everything else —
+  the three-panes description, the Ctrl+B row in the shortcuts table — was
+  already in place from earlier.
+
+  This is uncommitted, along with the sash-persistence code change. Both can go
+  into the next commit whenever you're ready to cut 1.3.1 (rebuild, commit,
+  push, release — same drill as before, just say go).
+
+✻ Sautéed for 1m 56s
+
+❯ is there a problem with long lines in the markdown                            
+● Let me check how the app's custom Help renderer actually treats line breaks
+  before answering:
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● No — long lines are completely fine, and for this app they're actually the
+  slightly safer format. Concretely:
+
+  In the app's Help window: the custom renderer (_render_markdown, app.py:1909)
+  does "lazy wrapping" — for paragraphs and bullets it gathers all following
+  non-blank lines and joins them with spaces into one string
+  (gather_continuation), and the Text widget then word-wraps to the window
+  width. So a paragraph written as one 300-character line and the same paragraph
+  hard-wrapped at 78 columns render pixel-identically. The screenshot I took a
+  moment ago was of your rewrapped file, rendering cleanly.
+
+  On GitHub: standard markdown treats consecutive lines as one paragraph anyway,
+  so both styles display the same there too.
+
+  The one real hazard actually favors long lines: gather_continuation stops
+  joining when a line looks like the start of a new block — a line beginning
+  with -, 1., #, |, or a code fence. With hard wrapping, if a break ever
+  happened to land so a continuation line starts with something like -  or 2. ,
+  the renderer would misread it as a new bullet mid-paragraph. One long line per
+  paragraph makes that impossible.
+
+  Two things to keep in mind with the long-line style, neither serious:
+
+  - Table rows must stay on one line each (the renderer detects tables by | per
+  line) — but that's true in any markdown, and your shortcuts table is fine.
+  - Git diffs get coarser — changing one word marks the whole paragraph line as
+  changed, so diffs are a bit noisier to review. That's the only cost, and it's
+  cosmetic.
+
+  So keep the rewrapped file as is — nothing needs changing.
+
+✻ Baked for 43s
+
+❯ rebuild the exe and installer                                                 
+
+● Since the tree now contains changes beyond the released 1.3.0 (sash
+  persistence + Help updates), I'll bump to 1.3.1 in both places first — the
+  build notes require app.py and installer.iss to stay in sync — then rebuild:
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 1 line
+      62  
+      63  
+      64  # Shown in the window title; keep in sync with AppVersion in in
+          staller.iss.
+      65 -APP_VERSION = "1.3.0"                                          
+      65 +APP_VERSION = "1.3.1"                                          
+      66  
+      67  # Metadata extensions we look for, in order of preference.
+      68  METADATA_EXTENSIONS = (".toc", ".json")
+
+● Update(installer.iss)
+  ⎿  Added 1 line, removed 1 line
+      3  ; Requires the app to be built first:  python -m PyInstaller PDF
+         Sherpa.spec
+      4  
+      5  #define AppName "PDF Sherpa"
+      6 -#define AppVersion "1.3.0"                                      
+      6 +#define AppVersion "1.3.1"                                      
+      7  #define AppExe "PDFSherpa.exe"
+      8  
+      9  [Setup]
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Invalid tool parameters
+
+● No monitor needed — the background build will notify on completion. Waiting
+  for it.
+
+  Read 1 file (ctrl+o to expand)
+
+● Background command "Build one-file exe with PyInstaller" completed (exit code
+0)
+
+● The exe build finished. Now the installer:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Both artifacts rebuilt as 1.3.1:
+
+  - dist\PDFSherpa.exe (52.6 MB) — smoke-tested: launches and the title reads
+  "PDF Sherpa - V1.3.1"
+  - installer\PDFSherpa-Setup.exe (54.1 MB) — compiled with the matching
+  AppVersion
+
+  I bumped the version to 1.3.1 in both app.py and installer.iss before
+  building, since the tree now has changes beyond the released 1.3.0 (persistent
+  sash position, Help/README updates) — rebuilding under the same version
+  number as the published release would have created two different binaries both
+  claiming 1.3.0.
+
+  Still pending, whenever you want them: the 1.3.1 changes aren't committed or
+  pushed, no v1.3.1 release exists yet, and the installed copy on this PC is
+  still 1.3.0 (I can re-run the installer to update it).
+
+✻ Brewed for 1m 36s
+
+※ recap: Adding per-PDF bookmarks to PDF Sherpa; v1.3.1 (persistent sash, doc updates) exe and installer are rebuilt and smoke-tested. Next: commit, push, release v1.3.1, and reinstall on this PC when you give the word. (disable recaps in /config)
+
+❯ commit, push update releases and re run the installer                         
+
+  Committed 3dfe660, pushed to main, searched for 2 patterns, ran 2 shell commands (ctrl+o to expand)
+
+● Nothing broken — the app has never persisted the chosen folder. The Dropbox
+  path in the earlier window title came from a "Choose folder…" done in that
+  session; a fresh launch always starts at <exe dir>\pdfs unless a folder is
+  passed on the command line. That's pre-existing behavior, not something the
+  update changed.
+
+  Everything you asked for is done:
+
+  - Commit: 3dfe660 "Remember the bookmarks divider position across runs
+  (v1.3.1)" — app.py, HELP.md, README.md, installer.iss.
+  - Push: fetched first (only the v1.3.0 tag was new remotely this time), pushed
+  cleanly — origin/main is now at 3dfe660.
+  - Release: v1.3.1 published at
+  https://github.com/Flinterpop/PDF_Sherpa/releases/tag/v1.3.1 with
+  PDFSherpa-Setup.exe (54 MB) attached.
+  - Installer re-run: silent install updated the per-user copy in
+  %LOCALAPPDATA%\Programs\PDF Sherpa\, and the installed app is running — title
+  reads "PDF Sherpa - V1.3.1". (No 1.3.0 instance was running, so nothing needed
+  closing.) You'll want to Choose folder… to point it back at your Dropbox
+  folder.
+
+  If that folder reset annoys you, a natural next improvement is persisting the
+  last chosen folder in the config like the geometry and fit preference — happy
+  to add it.
+
+✻ Cooked for 1m 58s
+
+❯ persist the last chosen folder in the config                                  
+
+● Let me look at choose_folder to add the save there:
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Update(app.py)
+  ⎿  Added 1 line
+      845                                           title="Choose folder 
+           containing PDFs")
+      846          if chosen:
+      847              self.folder = chosen
+      848 +            update_config({"folder": os.path.abspath(chosen)})
+      849              self.refresh_pdf_list()
+      850  
+      851      def refresh_pdf_list(self) -> None:
+
+● Update(app.py)
+  ⎿  Added 9 lines, removed 1 line
+      2033  
+      2034  
+      2035  def main() -> None:
+      2036 -    folder = sys.argv[1] if len(sys.argv) > 1 else _default_f
+           -older()                                                      
+      2036 +    # Folder precedence: command line, then the last folder c
+           +hosen via                                                    
+      2037 +    # "Choose folder..." (if it still exists -- it may be on 
+           +an unplugged                                                 
+      2038 +    # drive), then the default pdfs folder next to the app.  
+      2039 +    if len(sys.argv) > 1:                                    
+      2040 +        folder = sys.argv[1]                                 
+      2041 +    else:                                                    
+      2042 +        saved = load_config().get("folder")                  
+      2043 +        folder = (saved if isinstance(saved, str) and os.path
+           +.isdir(saved)                                                
+      2044 +                  else _default_folder())                    
+      2045  
+      2046      root = tk.Tk()
+      2047      root.title(f"PDF Sherpa - V{APP_VERSION}")
+
+● Update(HELP.md)
+  ⎿  Added 3 lines, removed 2 lines
+      53  
+      54  ## Choosing a folder
+      55  
+      56 -Use **Choose folder…** to point Sherpa at any folder of PDFs. I
+         -t remembers which subfolders you left open, your window size, a
+         -nd the last PDF you were                                       
+      57 -reading — and returns you to the page you left off on.         
+      56 +Use **Choose folder…** to point Sherpa at any folder of PDFs. Y
+         +our choice is remembered — the next launch opens the same folde
+         +r — along with which                                           
+      57 +subfolders you left open, your window size, and the last PDF yo
+         +u were reading, returning you to the page you left off on. (Sta
+         +rting the app with a                                           
+      58 +folder on the command line overrides the remembered folder.)   
+      59  
+      60  ## Searching
+      61  
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 1 line
+      42  python app.py C:\docs    # or point it at any folder
+      43  ```
+      44  
+      45 -You can also switch folders at runtime with the **Choose folder
+         -…** button.                                                    
+      45 +You can also switch folders at runtime with the **Choose folder
+         +…** button —                                                   
+      46 +the chosen folder is remembered and reopened on the next launch
+         + (a                                                            
+      47 +command-line folder overrides it).                             
+      48  
+      49  ## Installing (Windows)
+      50  
+
+● Now verify end-to-end: launch the real app as a subprocess with a seeded
+  config and check the window title; plus the save side and the missing-drive
+  fallback:
+
+● Write(~\AppData\Local\Temp\claude\C--source-py-PDF-Guide\6ada68bc-8dc5-4a6a-ab
+       5d-f18c405f59bd\scratchpad\check_folder_persist.py)
+  ⎿  Wrote 86 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Done — the last chosen folder now persists. Verified with 4/4 end-to-end
+  checks, including launching the real app as a fresh process:
+
+  - Choose folder… saves it: picking a folder writes "folder" into
+  %APPDATA%\PDFGuide\config.json (alongside geometry, fit pref, etc.), and the
+  title bar follows.
+  - Next launch reopens it: a fresh app process with no arguments started in the
+  saved folder.
+  - Safe fallback: if the saved folder no longer exists (deleted, or an
+  unplugged drive like J:), the app quietly falls back to the default pdfs
+  folder instead of erroring.
+  - Command line still wins: PDFSherpa.exe C:\docs overrides the remembered
+  folder, so existing shortcuts with a folder argument behave exactly as before.
+
+  HELP.md ("Choosing a folder") and README.md now describe the remembered folder
+  and the command-line override.
+
+  One practical note: once you run this build and pick your Dropbox folder, the
+  currently installed 1.3.1 will also start there — the config is shared, and
+  old versions simply ignore the extra key. The change is uncommitted and the
+  released 1.3.1 predates it, so whenever you want I'll do the usual cycle: bump
+  to 1.3.2, rebuild both artifacts, commit, push, release, and re-run the
+  installer.
+
+✻ Worked for 1m 36s
+
+❯ do the usual cycle                                                            
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 1 line
+      62  
+      63  
+      64  # Shown in the window title; keep in sync with AppVersion in in
+          staller.iss.
+      65 -APP_VERSION = "1.3.1"                                          
+      65 +APP_VERSION = "1.3.2"                                          
+      66  
+      67  # Metadata extensions we look for, in order of preference.
+      68  METADATA_EXTENSIONS = (".toc", ".json")
+
+● Update(installer.iss)
+  ⎿  Added 1 line, removed 1 line
+      3  ; Requires the app to be built first:  python -m PyInstaller PDF
+         Sherpa.spec
+      4  
+      5  #define AppName "PDF Sherpa"
+      6 -#define AppVersion "1.3.1"                                      
+      6 +#define AppVersion "1.3.2"                                      
+      7  #define AppExe "PDFSherpa.exe"
+      8  
+      9  [Setup]
+
+  Committed fa0728e, pushed to main, ran 1 shell command (ctrl+o to expand)
+
+● Task Output bewq7vfxk
+  ⎿  71 INFO: PyInstaller: 6.19.0, contrib hooks: 2026.3
+     71 INFO: Python: 3.14.3
+     86 INFO: Platform: Windows-10-10.0.19045-SP0
+     … +88 lines (ctrl+o to expand)
+
+● Background command "Build one-file exe with PyInstaller" completed (exit code
+0)
+
+  Ran 3 shell commands, wrote 1 memory (ctrl+o to expand)
+
+● Full cycle complete — v1.3.2 is built, shipped, and installed:
+
+  - Version: bumped to 1.3.2 in app.py and installer.iss.
+  - Commit & push: fa0728e "Remember the last chosen folder across runs
+  (v1.3.2)" — pushed cleanly, origin/main is current.
+  - Build: exe rebuilt and smoke-tested (title shows V1.3.2); installer
+  compiled.
+  - Release: https://github.com/Flinterpop/PDF_Sherpa/releases/tag/v1.3.2 with
+  PDFSherpa-Setup.exe (54 MB) attached.
+  - Installed: the per-user copy updated silently and is running now — "PDF
+  Sherpa - V1.3.2".
+
+  One expected detail: the window opened at the default pdfs folder one last
+  time, because folder-remembering only starts working once a folder is chosen
+  by this version (1.3.1 never saved it). Pick your Dropbox folder with Choose 
+  folder… now and every future launch will open there.
+
+✻ Sautéed for 1m 57s
+
+❯ update all docs                                                               
+
+● Let me re-read both docs and the module docstring to find anything stale after
+  all the recent changes:
+
+  Read 2 files (ctrl+o to expand)
+● The docs are mostly current; I found a handful of genuinely stale spots.
+  Fixing them all:
+
+● Update(README.md)
+  ⎿  Added 2 lines, removed 1 line
+       8  
+       9  A small desktop app (Tkinter) that lets you browse PDFs by topi
+          c.
+      10  
+      11 -- **Left pane** — lists every PDF in a subfolder (default `./pd
+         -fs`).                                                          
+      11 +- **Left pane** — lists every PDF in a folder (the last folder 
+         +you chose, or                                                  
+      12 +  a `./pdfs` subfolder by default).                            
+      13  - **Middle pane** — when you select a PDF, shows the topics and
+           page numbers from
+      14    its companion metadata file (same base name, `.toc` or `.json
+          `), with your
+      15    own bookmarks in a resizable list above them.
+
+● Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      39  ## Run
+      40  
+      41  ```
+      42 -python app.py            # uses the ./pdfs subfolder           
+      42 +python app.py            # last chosen folder (or the ./pdfs su
+         +bfolder)                                                       
+      43  python app.py C:\docs    # or point it at any folder
+      44  ```
+      45  
+
+● Update(README.md)
+  ⎿  Added 2 lines, removed 1 line
+      114  - **Highlight text**: drag across text in the viewer (words sh
+           ade blue), then
+      115    click **Highlight** or right-click → *Highlight selection*. 
+           **Save**
+      116    (`Ctrl+S`) offers an annotated copy — `manual.pdf` → `manual
+           (ann).pdf`, with
+      117 -  the topics file copied along — or writes into the original f
+          -ile. Right-click                                              
+      117 +  the topics and bookmarks files copied along — or writes into
+          + the original                                                 
+      118 +  file. Right-click                                           
+      119    an existing highlight to remove it. Highlights are standard 
+           PDF annotations,
+      120    visible in any viewer.
+      121  - **Bookmarks**: press `Ctrl+B` (or the **🔖** button, or righ
+           t-click the page)
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 1 line
+      141  - A PDF without a metadata file is still listed (marked `(no m
+           etadata)`) and
+      142    viewable — you just won't get the topic list. **Refresh** (b
+           utton or `F5`)
+      143    offers to **auto-build topic lists** for any PDFs that don't
+            have one, using
+      144 -  each PDF's bookmarks — or its text headings when there are n
+          -o bookmarks.                                                  
+      144 +  each PDF's built-in outline bookmarks — or its text headings
+          + when there are                                               
+      145 +  none. (These built-in bookmarks are separate from your own `
+          +Ctrl+B`                                                       
+      146 +  bookmarks.)                                                 
+      147  - **Drop PDFs onto the window** (from Explorer, Outlook attach
+           ments saved to
+      148    disk, etc.) and they are **copied into an `inbox` subfolder*
+           * of the current
+      149    folder, a **`.toc` topics file is auto-generated** for each 
+           (bookmarks first,
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 2 lines
+      155    and re-applied to every PDF you open — and it persists acros
+           s app runs
+      156    (saved to `%APPDATA%\PDFGuide\config.json`). Manual **+/−** 
+           zoom is a temporary
+      157    override that doesn't change the saved preference.
+      158 -- The app also remembers your **window size/position** and **r
+          -e-opens the last                                              
+      159 -  PDF** you were viewing on the next launch (same config file)
+          -.                                                             
+      158 +- The app also remembers your **window size/position**, the **
+          +folder you                                                    
+      159 +  chose**, the **bookmarks divider position**, and **re-opens 
+          +the last PDF**                                                
+      160 +  you were viewing on the next launch (same config file).     
+      161  - The mouse wheel scrolls within the page and **flips to the n
+           ext/previous page
+      162    when you scroll past the bottom/top edge**.
+      163  
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 1 line
+       4  
+       5  A small desktop app that:
+       6  
+       7 -1. Lists every PDF found in a subfolder (default: ./pdfs).     
+       7 +1. Lists every PDF found in a folder (the last chosen folder, o
+         +r ./pdfs).                                                     
+       8  2. When a PDF is selected, loads its companion metadata file --
+           same base
+       9     filename, different extension (.toc or .json) -- and shows t
+          he list of
+      10     topics with their page numbers.
+
+● Update(HELP.md)
+  ⎿  Added 2 lines, removed 1 line
+      25  
+      26  Every PDF can have a companion topics file with the same base n
+          ame — for example `manual.pdf` pairs with `manual.toc`. If a PD
+          F has none, it shows as
+      27  `(no metadata)`. Press **Refresh** (or `F5`) and choose to buil
+          d topic lists:
+      28 -Sherpa reads each PDF's bookmarks, or falls back to detecting h
+         -eadings from the text when there are no bookmarks.             
+      28 +Sherpa reads each PDF's built-in outline bookmarks (not your ow
+         +n `Ctrl+B` bookmarks), or falls back to detecting headings from
+         + the text when there are                                       
+      29 +none.                                                          
+      30  
+      31  A `.toc` is a plain text file you can edit by hand — the page i
+          s the trailing number, so topics may contain colons and dashes:
+      32  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All docs are now up to date. What I found and fixed in this pass:
+
+  - README.md
+    - Left-pane bullet and the python app.py comment still said the app always
+  starts at ./pdfs — now they mention the remembered folder.
+    - The Highlight-text note still said only the topics file is copied with an
+  (ann) copy — now "topics and bookmarks files".
+    - The "remembers across runs" bullet now lists the chosen folder and the
+  bookmarks divider position alongside window size and last PDF.
+    - Disambiguated the Refresh/auto-build note: it uses each PDF's built-in 
+  outline bookmarks, which are separate from your own Ctrl+B bookmarks — that
+  word was doing double duty since the new feature landed.
+  - HELP.md: same built-in-vs-your-bookmarks clarification in the Topic files
+  section (the rest was already current from earlier passes). Re-verified it
+  renders cleanly in the app's Help window.
+  - app.py docstring: feature list now says "the last chosen folder, or ./pdfs".
+
+  Everything else — bookmarks sections, shortcut tables, Choosing a folder,
+  divider persistence — was already accurate.
+
+  These edits are uncommitted. Note that HELP.md is bundled inside the exe, so
+  the installed app's Help window won't show the clarifications until the next
+  rebuild — they can ride along with whatever the next release is, or say "usual
+  cycle" and I'll ship a 1.3.3 doc refresh now.
+
+✻ Brewed for 1m 14s
+
+❯ usual cycle                                                                   
+
+● Update(app.py)
+  ⎿  Added 1 line, removed 1 line
+      62  
+      63  
+      64  # Shown in the window title; keep in sync with AppVersion in in
+          staller.iss.
+      65 -APP_VERSION = "1.3.2"                                          
+      65 +APP_VERSION = "1.3.3"                                          
+      66  
+      67  # Metadata extensions we look for, in order of preference.
+      68  METADATA_EXTENSIONS = (".toc", ".json")
+
+● Update(installer.iss)
+  ⎿  Added 1 line, removed 1 line
+      3  ; Requires the app to be built first:  python -m PyInstaller PDF
+         Sherpa.spec
+      4  
+      5  #define AppName "PDF Sherpa"
+      6 -#define AppVersion "1.3.2"                                      
+      6 +#define AppVersion "1.3.3"                                      
+      7  #define AppExe "PDFSherpa.exe"
+      8  
+      9  [Setup]
+
+  Committed 7605ce2, pushed to main, ran 1 shell command (ctrl+o to expand)
+
+● Task Output brpbn8yx3
+  ⎿  71 INFO: PyInstaller: 6.19.0, contrib hooks: 2026.3
+     71 INFO: Python: 3.14.3
+     85 INFO: Platform: Windows-10-10.0.19045-SP0
+     … +88 lines (ctrl+o to expand)
+
+● Background command "Build one-file exe with PyInstaller" completed (exit code
+0)
+
+  Ran 3 shell commands, wrote 1 memory (ctrl+o to expand)
+
+● Cycle complete — v1.3.3 (doc-only release) is shipped and installed:
+
+  - Commit & push: 7605ce2 "Bring the docs up to date with the 1.3.x features
+  (v1.3.3)" — pushed, origin/main current.
+  - Build: exe and installer rebuilt with the updated bundled HELP.md; smoke
+  test showed "PDF Sherpa - V1.3.3".
+  - Release: https://github.com/Flinterpop/PDF_Sherpa/releases/tag/v1.3.3 with
+  the installer attached.
+  - Installed: the per-user copy is updated and running — title reads "PDF
+  Sherpa - V1.3.3 - J:\Dropbox\03_Work\N05_PublishedDocs", opening directly in
+  your Dropbox folder thanks to the remembered-folder feature.
+
+  The in-app Help now matches the shipped behavior exactly. Repo, release, and
+  installed copy are all in sync at 1.3.3.
+
+✻ Brewed for 1m 54s
+
+❯ done                                                                          
+
+● All wrapped up. Today's session took PDF Sherpa from 1.2.1 to 1.3.3: per-PDF
+  named bookmarks in their own resizable pane, persistent divider and folder,
+  refreshed docs — all committed, released on GitHub, and installed on this PC.
+  Enjoy the bookmarks!
+✻ Cogitated for 6s
