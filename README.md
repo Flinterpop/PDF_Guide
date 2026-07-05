@@ -117,8 +117,9 @@ Page numbers are **1-based** (page 1 = the first page).
 - **Bookmarks**: press `Ctrl+B` (or the **🔖** button, or right-click the page)
   to bookmark the current page under a name of your choice. Bookmarks get
   their own list above the Topics (shown only when the PDF has bookmarks; it
-  starts at a quarter of the pane and the divider is draggable) — click to
-  jump, right-click to rename or delete. They live in a `name.bookmarks.json` sidecar next to the PDF, so
+  starts at a quarter of the pane and the divider is draggable, with the
+  position remembered across runs) — click to jump, right-click to rename or
+  delete. They live in a `name.bookmarks.json` sidecar next to the PDF, so
   they travel with the folder and can be hand-edited; an `(ann)` copy gets the
   sidecar copied along too.
 - **PDFs / Topics** toolbar toggles collapse the left and middle panes — hide

@@ -62,7 +62,7 @@ except ImportError:  # pragma: no cover
 
 
 # Shown in the window title; keep in sync with AppVersion in installer.iss.
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 # Metadata extensions we look for, in order of preference.
 METADATA_EXTENSIONS = (".toc", ".json")
@@ -249,9 +249,12 @@ class PDFSherpaApp(ttk.Frame):
         # the list index targeted by the tree's right-click menu.
         self._bookmarks: list[dict] = []
         self._bm_menu_index: int | None = None
-        # Where the user last dragged the bookmarks/topics sash (pixels);
-        # None until dragged, meaning "use the default 25%".
-        self._bm_sash: int | None = None
+        # Where the user last dragged the bookmarks/topics sash (pixels).
+        # Persisted across runs; None means "use the default 25%".
+        saved_sash = load_config().get("bm_sash")
+        self._bm_sash: int | None = (
+            saved_sash if isinstance(saved_sash, int) and saved_sash > 0
+            else None)
         # Content search over the open PDF: (page_index, fitz.Rect) per hit.
         # The scan runs in chunks on the Tk event loop so big documents don't
         # freeze the UI; matches/label fill in progressively.
@@ -1051,7 +1054,12 @@ class PDFSherpaApp(ttk.Frame):
 
     def _on_close(self) -> None:
         self._maybe_save_annots()
-        update_config({"geometry": self.winfo_toplevel().geometry()})
+        if str(self._bm_frame) in self._mid_split.panes():
+            self._bm_sash = self._mid_split.sashpos(0)
+        updates = {"geometry": self.winfo_toplevel().geometry()}
+        if self._bm_sash is not None:
+            updates["bm_sash"] = self._bm_sash
+        update_config(updates)
         self.winfo_toplevel().destroy()
 
     # -- Topics ---------------------------------------------------------------
