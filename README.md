@@ -55,6 +55,12 @@ It is a per-user installer (no admin rights needed): it installs the app, adds
 Start-Menu (and optional desktop) shortcuts, and registers an uninstaller.
 Point the app at your own PDF folder with **Choose folder…** after installing.
 
+The app **checks for updates at launch** (quietly, in the background) and
+offers to download and install a newer release in place — or to skip that
+version (`"skip_version"` in the config file). A manual **Check for updates**
+button lives at the bottom of the Help window. To disable the launch check,
+add `"check_updates": false` to `%APPDATA%\PDFGuide\config.json`.
+
 ## Standalone build & installer (Windows)
 
 Build the one-file exe, then compile the installer:

@@ -42,6 +42,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
+import urllib.request
 import webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
@@ -63,6 +66,11 @@ except ImportError:  # pragma: no cover
 
 # Shown in the window title; keep in sync with AppVersion in installer.iss.
 APP_VERSION = "1.3.3"
+
+# Where the launch-time update check looks for new releases.
+UPDATE_API_URL = ("https://api.github.com/repos/"
+                  "Flinterpop/PDF_Sherpa/releases/latest")
+UPDATE_ASSET_NAME = "PDFSherpa-Setup.exe"
 
 # Metadata extensions we look for, in order of preference.
 METADATA_EXTENSIONS = (".toc", ".json")
@@ -293,6 +301,9 @@ class PDFSherpaApp(ttk.Frame):
         self._enable_file_drop()
         self.refresh_pdf_list()
         self._restore_session()
+        # Check for a newer release once the window has settled.  Opt out
+        # with "check_updates": false in config.json.
+        self.after(2000, self._start_update_check)
 
     # -- Layout ---------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -516,10 +527,10 @@ class PDFSherpaApp(ttk.Frame):
                      "Bookmark the current page (Ctrl+B). Bookmarks appear\n"
                      "in their own list above the Topics; right-click one\n"
                      "there to rename or delete it.")
-        ttk.Button(nav, text="−",
+        ttk.Button(nav, text="−", width=3,
                    command=lambda: self.change_zoom(1 / ZOOM_STEP)
                    ).pack(side="right")
-        ttk.Button(nav, text="+",
+        ttk.Button(nav, text="+", width=3,
                    command=lambda: self.change_zoom(ZOOM_STEP)
                    ).pack(side="right", padx=(0, 4))
         full_btn = ttk.Button(nav, text="Full page", command=self.fit_page)
@@ -824,6 +835,15 @@ class PDFSherpaApp(ttk.Frame):
             except tk.TclError:
                 pass
 
+        # Version + update check live at the bottom of the Help window
+        # (packed first so the bar keeps its space when the window shrinks).
+        bottom = ttk.Frame(win, padding=(16, 6))
+        bottom.pack(side="bottom", fill="x")
+        ttk.Label(bottom, text=f"PDF Sherpa V{APP_VERSION}").pack(side="left")
+        ttk.Button(bottom, text="Check for updates",
+                   command=lambda: self._start_update_check(manual=True)
+                   ).pack(side="right")
+
         wrap = ttk.Frame(win)
         wrap.pack(fill="both", expand=True)
         text = tk.Text(wrap, wrap="word", padx=16, pady=12, borderwidth=0,
@@ -838,6 +858,166 @@ class PDFSherpaApp(ttk.Frame):
         text.config(state="disabled")
 
         win.bind("<Escape>", lambda e: win.destroy())
+
+    # -- Updates ---------------------------------------------------------------
+    #
+    # The check runs on a daemon thread because urllib blocks.  Like the
+    # drag-drop hook above, the thread NEVER touches Tk: it only assigns a
+    # plain attribute, and an after()-scheduled poller on the main loop picks
+    # the result up and does the UI work.
+
+    def _start_update_check(self, manual: bool = False) -> None:
+        """Kick off a release check.  Auto checks (launch) fail silently and
+        honor the config opt-outs; manual checks (Help window) always run and
+        always report an outcome."""
+        thread = getattr(self, "_update_thread", None)
+        if thread is not None and thread.is_alive():
+            return
+        if not manual and not load_config().get("check_updates", True):
+            return
+        self._update_result: tuple | None = None
+        self._update_thread = threading.Thread(target=self._update_worker,
+                                               daemon=True)
+        self._update_thread.start()
+        self.after(500, lambda: self._poll_update_result(manual))
+
+    def _update_worker(self) -> None:
+        """Thread body -- no Tk calls here (see _enable_file_drop's note)."""
+        try:
+            self._update_result = ("ok", _fetch_latest_release())
+        except Exception as exc:  # offline, rate limit, bad JSON, bad tag
+            self._update_result = ("error", str(exc))
+
+    def _poll_update_result(self, manual: bool) -> None:
+        """Main-loop poller: wait for the worker, then act on its result."""
+        if not self.winfo_exists():
+            return
+        if self._update_result is None:
+            self.after(500, lambda: self._poll_update_result(manual))
+            return
+        status, payload = self._update_result
+        if status == "error":
+            if manual:
+                messagebox.showwarning(
+                    "Check for updates",
+                    f"Could not check for updates:\n{payload}")
+            return
+        info = payload
+        current = _parse_version(APP_VERSION)
+        if current is not None and info["version"] <= current:
+            if manual:
+                messagebox.showinfo("Check for updates",
+                                    f"You're up to date (V{APP_VERSION}).")
+            return
+        if (not manual
+                and load_config().get("skip_version") == info["version_str"]):
+            return
+        self._prompt_update(info)
+
+    def _prompt_update(self, info: dict) -> None:
+        choice = messagebox.askyesnocancel(
+            "Update available",
+            f"PDF Sherpa V{info['version_str']} is available "
+            f"(you have V{APP_VERSION}).\n\n"
+            "Yes  –  download and install it now\n"
+            "No  –  skip this version (won't ask again)\n"
+            "Cancel  –  remind me next time")
+        if choice is None:
+            return  # remind again next launch
+        if not choice:
+            update_config({"skip_version": info["version_str"]})
+            return
+        if getattr(sys, "frozen", False) and info["asset_url"]:
+            self._begin_download(info)
+        else:
+            # Running from source (or no installer asset): don't install over
+            # a dev checkout -- just open the releases page.
+            webbrowser.open(info["html_url"])
+
+    def _begin_download(self, info: dict) -> None:
+        """Download the installer in the background with a small progress
+        window; the app stays usable underneath."""
+        dest = os.path.join(tempfile.gettempdir(),
+                            f"PDFSherpa-Setup-{info['version_str']}.exe")
+        win = tk.Toplevel(self)
+        self._dl_win = win
+        win.title("Updating PDF Sherpa")
+        win.resizable(False, False)
+        top = self.winfo_toplevel()
+        win.geometry(f"+{top.winfo_rootx() + 80}+{top.winfo_rooty() + 80}")
+        ttk.Label(win, text="Downloading update… PDF Sherpa will "
+                            "restart when it's ready.",
+                  padding=(16, 12)).pack()
+        bar = ttk.Progressbar(win, mode="indeterminate", length=280)
+        bar.pack(padx=16, pady=(0, 14))
+        bar.start(12)
+        self._download_result: tuple | None = None
+        threading.Thread(target=self._download_worker,
+                         args=(info["asset_url"], dest), daemon=True).start()
+        self.after(500, self._poll_download_result)
+
+    def _download_worker(self, url: str, dest: str) -> None:
+        """Thread body -- no Tk calls here."""
+        try:
+            req = urllib.request.Request(url,
+                                         headers={"User-Agent": "PDFSherpa"})
+            with urllib.request.urlopen(req, timeout=30) as resp, \
+                    open(dest + ".part", "wb") as out:
+                shutil.copyfileobj(resp, out, 256 * 1024)
+            os.replace(dest + ".part", dest)
+            self._download_result = ("ok", dest)
+        except Exception as exc:
+            self._download_result = ("error", str(exc))
+
+    def _poll_download_result(self) -> None:
+        if not self.winfo_exists():
+            return
+        if self._download_result is None:
+            self.after(500, self._poll_download_result)
+            return
+        if self._dl_win.winfo_exists():
+            self._dl_win.destroy()
+        status, payload = self._download_result
+        if status == "error":
+            # The user explicitly asked for this download, so don't be silent.
+            messagebox.showerror(
+                "Update failed",
+                f"The download failed:\n{payload}\n\n"
+                "You can download the update manually from the releases "
+                "page on GitHub.")
+            return
+        self._launch_installer_and_exit(payload)
+
+    def _launch_installer_and_exit(self, setup_path: str) -> None:
+        """Hand off to the installer and quit so it can replace the exe.
+
+        A detached hidden cmd runs a small batch file: wait ~2 s for this
+        process to exit and release the exe lock, run the installer silently,
+        relaunch the app, clean up.  Each line runs even if an earlier one
+        failed, so a failed install still relaunches the intact old exe.
+        The steps live in a batch file rather than an inline `cmd /c` string
+        because list2cmdline escapes quotes as \" -- which cmd.exe does not
+        understand -- garbling any quoted path.  installer.iss's [Run] entry
+        is `skipifsilent`, so the silent install won't also launch the app
+        (no double launch).  CREATE_NO_WINDOW rather than DETACHED_PROCESS
+        because timeout.exe needs a (hidden) console to run.
+        """
+        app_exe = sys.executable  # the installer overwrites this same path
+        batch_path = setup_path + ".cmd"
+        with open(batch_path, "w", encoding="ascii", errors="replace") as fh:
+            fh.write(f'timeout /t 2 /nobreak >nul\r\n'
+                     f'"{setup_path}" /VERYSILENT /NORESTART '
+                     f'/SUPPRESSMSGBOXES\r\n'
+                     f'start "" "{app_exe}"\r\n'
+                     f'del /q "{setup_path}"\r\n'
+                     f'del /q "%~f0"\r\n')
+        subprocess.Popen(
+            ["cmd", "/c", batch_path],
+            creationflags=(subprocess.CREATE_NO_WINDOW
+                           | subprocess.CREATE_NEW_PROCESS_GROUP),
+            close_fds=True,
+            cwd=os.path.dirname(setup_path))
+        self._on_close()
 
     # -- PDF list -------------------------------------------------------------
     def choose_folder(self) -> None:
@@ -2021,6 +2201,46 @@ def _resource_path(name: str) -> str:
     """Locate a bundled resource, whether running from source or frozen."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
+
+
+def _parse_version(text: str) -> tuple[int, ...] | None:
+    """'v1.3.3' / '1.3.3' -> (1, 3, 3); None if malformed (e.g. a beta tag)."""
+    try:
+        return tuple(int(part) for part in text.lstrip("vV").split("."))
+    except ValueError:
+        return None
+
+
+def _fetch_latest_release() -> dict:
+    """Query GitHub for the newest release.  Blocking -- worker thread only.
+
+    Returns {"version": tuple, "version_str": str, "asset_url": str | None,
+    "html_url": str}.  Raises on any failure (network, JSON, bad tag); the
+    caller decides whether that is silent (auto check) or reported (manual).
+    """
+    req = urllib.request.Request(
+        UPDATE_API_URL,
+        headers={"User-Agent": "PDFSherpa",
+                 "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.load(resp)
+    tag = data.get("tag_name", "")
+    version = _parse_version(tag)
+    if version is None:
+        raise ValueError(f"unrecognized release tag: {tag!r}")
+    asset_url = None
+    for asset in data.get("assets", []):
+        if asset.get("name") == UPDATE_ASSET_NAME:
+            asset_url = asset.get("browser_download_url")
+            break
+        if asset_url is None and str(asset.get("name", "")).endswith(".exe"):
+            asset_url = asset.get("browser_download_url")
+    return {"version": version,
+            "version_str": tag.lstrip("vV"),
+            "asset_url": asset_url,
+            "html_url": data.get(
+                "html_url",
+                "https://github.com/Flinterpop/PDF_Sherpa/releases/latest")}
 
 
 def _default_folder() -> str:

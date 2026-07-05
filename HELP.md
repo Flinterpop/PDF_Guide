@@ -109,6 +109,17 @@ warns first).
 
 Arrow, space, and page keys defer to the PDF and topic lists while one of them has keyboard focus, so you can still navigate the lists from the keyboard.
 
+## Updates
+
+A couple of seconds after launch, Sherpa quietly checks GitHub for a newer release (it never interrupts you when you're up to date or offline). When
+one is found you get three choices: **Yes** downloads the installer and updates in place — the app restarts on the new version by itself; **No** skips
+that version for good (you'll be asked again for the next one); **Cancel** just reminds you on the next launch.
+
+You can also check on demand with the **Check for updates** button at the bottom of this Help window — it always answers, including "You're up to
+date", and still offers a version you previously skipped.
+
+To turn the launch check off entirely, add `"check_updates": false` to `%APPDATA%\PDFGuide\config.json`.
+
 ## More
 
 Project page: [github.com/Flinterpop/PDF_Sherpa](https://github.com/Flinterpop/PDF_Sherpa)
