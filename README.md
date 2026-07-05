@@ -10,12 +10,16 @@ A small desktop app (Tkinter) that lets you browse PDFs by topic.
 
 - **Left pane** — lists every PDF in a subfolder (default `./pdfs`).
 - **Middle pane** — when you select a PDF, shows the topics and page numbers from
-  its companion metadata file (same base name, `.toc` or `.json`).
+  its companion metadata file (same base name, `.toc` or `.json`), with your
+  own bookmarks in a resizable list above them.
 - **Right pane** — an embedded viewer. Click a topic and the PDF jumps to that page.
 - **Search everywhere** — filter the PDF list by name, filter the topic list,
   and full-text search inside the open PDF with highlighted matches.
 - **Highlight text** — drag-select words on the page and save them as real PDF
   highlight annotations, into the original or an `(ann)` copy.
+- **Bookmarks** — mark pages with your own names (`Ctrl+B`); they show in
+  their own list above the Topics and are saved beside the PDF in
+  `name.bookmarks.json`.
 - **Drag & drop** — drop a PDF anywhere on the window to file it into an
   `inbox` subfolder with an auto-generated topics file.
 
@@ -110,6 +114,13 @@ Page numbers are **1-based** (page 1 = the first page).
   the topics file copied along — or writes into the original file. Right-click
   an existing highlight to remove it. Highlights are standard PDF annotations,
   visible in any viewer.
+- **Bookmarks**: press `Ctrl+B` (or the **🔖** button, or right-click the page)
+  to bookmark the current page under a name of your choice. Bookmarks get
+  their own list above the Topics (shown only when the PDF has bookmarks; it
+  starts at a quarter of the pane and the divider is draggable) — click to
+  jump, right-click to rename or delete. They live in a `name.bookmarks.json` sidecar next to the PDF, so
+  they travel with the folder and can be hand-edited; an `(ann)` copy gets the
+  sidecar copied along too.
 - **PDFs / Topics** toolbar toggles collapse the left and middle panes — hide
   both for a full-width reading view. The choice persists across runs.
 - **Full page** fits the whole page and resizes the window to hug it; dragging
@@ -152,6 +163,7 @@ Page numbers are **1-based** (page 1 = the first page).
 | `+` / `=` / `−` | Zoom in / out |
 | `W` | Fit width |
 | `P` | Full page |
+| `Ctrl+B` | Bookmark the current page |
 | `Ctrl+F` | Focus the content search box |
 | `Ctrl+S` | Save highlights to the PDF |
 | `F3` / `Shift+F3` | Next / previous search match |

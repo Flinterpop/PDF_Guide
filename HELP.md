@@ -11,7 +11,9 @@ built-in viewer.
 - **PDFs** (left) — every PDF found under the current folder, grouped by
   subfolder. Click one to open it. The search box filters the list as you type.
 - **Topics** (middle) — the selected PDF's topic list. Click a topic to jump
-  straight to that page. The search box filters the topics as you type.
+  straight to that page. The search box filters the topics as you type. If the
+  PDF has bookmarks, they appear in their own list above the topics (see
+  **Bookmarks** below).
 - **Viewer** (right) — the embedded page view, with a search box that finds
   text inside the open PDF (see **Searching** below).
 
@@ -45,6 +47,21 @@ Advanced Topics: 42
 ```
 
 Page numbers are **1-based** (page 1 is the first page).
+
+## Bookmarks
+
+Mark your own places in a PDF: press `Ctrl+B` (or the **🔖** button, or
+right-click the page and choose **Bookmark this page**) to bookmark the page
+you're reading. Name it whatever you like — the suggested name is just
+`Page N`. Your bookmarks appear in their own **Bookmarks** list above the
+Topics — it only shows when the PDF has bookmarks, and you can drag the
+divider between the two lists to resize it. Click a bookmark to jump to its
+page, right-click one to **Rename** or **Delete** it. (These are separate from
+a PDF's built-in bookmarks, which feed the topic list.)
+
+Bookmarks are saved next to the PDF — `manual.pdf` gets
+`manual.bookmarks.json` — so they travel with the folder and are easy to edit
+by hand. Deleting the last bookmark removes the file.
 
 ## Choosing a folder
 
@@ -108,6 +125,7 @@ warns first).
 | + / = / - | Zoom in / out |
 | W | Fit width |
 | P | Full page |
+| Ctrl+B | Bookmark the current page |
 | Ctrl+F | Focus the content search box |
 | Ctrl+S | Save highlights to the PDF |
 | F3 / Shift+F3 | Next / previous search match |

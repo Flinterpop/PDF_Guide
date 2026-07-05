@@ -11,6 +11,8 @@ A small desktop app that:
 3. Clicking a topic/page opens the PDF (embedded viewer) at that page.
 4. Drop a PDF anywhere on the window to copy it into an 'inbox' subfolder
    of the current folder and auto-generate its .toc topics file.
+5. Bookmark pages (Ctrl+B) with your own names; bookmarks show in their own
+   list above the Topics and are saved next to the PDF (name.bookmarks.json).
 
 Metadata file formats (auto-detected by extension, .toc preferred):
 
@@ -42,7 +44,7 @@ import subprocess
 import sys
 import webbrowser
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 
 import tocgen
 
@@ -60,7 +62,7 @@ except ImportError:  # pragma: no cover
 
 
 # Shown in the window title; keep in sync with AppVersion in installer.iss.
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 
 # Metadata extensions we look for, in order of preference.
 METADATA_EXTENSIONS = (".toc", ".json")
@@ -165,6 +167,61 @@ def load_metadata(metadata_path: str) -> list[tuple[str, int]]:
 
 
 # ----------------------------------------------------------------------------
+# Bookmarks (per-PDF sidecar: name.bookmarks.json next to the PDF)
+# ----------------------------------------------------------------------------
+def bookmarks_path(pdf_path: str) -> str:
+    """Return the bookmarks sidecar path for a PDF (manual.pdf ->
+    manual.bookmarks.json).  The double extension keeps it clear of the
+    .toc/.json metadata lookup in find_metadata_path."""
+    return os.path.splitext(pdf_path)[0] + ".bookmarks.json"
+
+
+def load_bookmarks(pdf_path: str) -> list[dict]:
+    """Load a PDF's bookmarks: a list of {"page": int, "title": str} dicts,
+    sorted by page.  Missing sidecar is the normal case -> []."""
+    path = bookmarks_path(pdf_path)
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        bookmarks = []
+        for item in data:
+            page = int(item["page"])
+            title = str(item["title"]).strip()
+            if page >= 1 and title:
+                bookmarks.append({"page": page, "title": title})
+        bookmarks.sort(key=lambda b: b["page"])
+        return bookmarks
+    except Exception as exc:  # corrupt/unreadable; next save overwrites it
+        messagebox.showwarning(
+            "Bookmarks",
+            f"Could not read {os.path.basename(path)}:\n\n{exc}\n\n"
+            "Starting with no bookmarks for this PDF.")
+        return []
+
+
+def save_bookmarks(pdf_path: str, bookmarks: list[dict]) -> bool:
+    """Write a PDF's bookmarks sidecar; an empty list deletes the file
+    (no file = no bookmarks).  Returns False if the write failed."""
+    path = bookmarks_path(pdf_path)
+    try:
+        if not bookmarks:
+            if os.path.isfile(path):
+                os.remove(path)
+            return True
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(bookmarks, fh, indent=2)
+        return True
+    except OSError as exc:
+        messagebox.showwarning(
+            "Bookmarks",
+            f"Could not write {path}:\n\n{exc}\n\n"
+            "Bookmarks will be kept for this session only.")
+        return False
+
+
+# ----------------------------------------------------------------------------
 # GUI
 # ----------------------------------------------------------------------------
 class PDFSherpaApp(ttk.Frame):
@@ -188,6 +245,13 @@ class PDFSherpaApp(ttk.Frame):
         self.topic_filter_text = ""     # current topic-list search filter
         self._topic_entries: list[tuple[str, int]] = []  # current PDF's topics
         self._topic_placeholder: str | None = None  # shown instead of topics
+        # Current PDF's bookmarks ({"page", "title"} dicts, page-sorted) and
+        # the list index targeted by the tree's right-click menu.
+        self._bookmarks: list[dict] = []
+        self._bm_menu_index: int | None = None
+        # Where the user last dragged the bookmarks/topics sash (pixels);
+        # None until dragged, meaning "use the default 25%".
+        self._bm_sash: int | None = None
         # Content search over the open PDF: (page_index, fitz.Rect) per hit.
         # The scan runs in chunks on the Tk event loop so big documents don't
         # freeze the UI; matches/label fill in progressively.
@@ -319,10 +383,39 @@ class PDFSherpaApp(ttk.Frame):
 
         # 2. Topics
         mid = ttk.Frame(panes)
-        ttk.Label(mid, text="Topics").pack(anchor="w")
+        # Vertical split: Bookmarks over Topics, with a draggable sash.  The
+        # Bookmarks pane is only attached while the PDF has bookmarks (it
+        # starts at 25% of the height); otherwise Topics takes it all.
+        self._mid_split = ttk.PanedWindow(mid, orient="vertical")
+        self._mid_split.pack(fill="both", expand=True)
+
+        self._bm_frame = ttk.Frame(self._mid_split)
+        # Not added to the split here -- _populate_bookmark_tree attaches and
+        # detaches it as bookmarks come and go.
+        ttk.Label(self._bm_frame, text="Bookmarks").pack(anchor="w")
+        bm_wrap = ttk.Frame(self._bm_frame)
+        bm_wrap.pack(side="top", fill="both", expand=True)
+        self.bm_tree = ttk.Treeview(bm_wrap, columns=("page",),
+                                    show="tree headings",
+                                    selectmode="browse", height=3)
+        self.bm_tree.heading("#0", text="Bookmark")
+        self.bm_tree.heading("page", text="Page")
+        self.bm_tree.column("#0", width=200, anchor="w")
+        self.bm_tree.column("page", width=50, anchor="center", stretch=False)
+        self.bm_tree.pack(side="left", fill="both", expand=True)
+        bm_sb = ttk.Scrollbar(bm_wrap, orient="vertical",
+                              command=self.bm_tree.yview)
+        bm_sb.pack(side="right", fill="y")
+        self.bm_tree.config(yscrollcommand=bm_sb.set)
+        self.bm_tree.bind("<<TreeviewSelect>>", self.on_bookmark_selected)
+        self.bm_tree.bind("<Button-3>", self._on_bm_right_click)
+
+        topics = ttk.Frame(self._mid_split)
+        self._mid_split.add(topics, weight=3)
+        ttk.Label(topics, text="Topics").pack(anchor="w")
 
         # Search / filter box (filters the current PDF's topics only)
-        topic_search = ttk.Frame(mid)
+        topic_search = ttk.Frame(topics)
         topic_search.pack(side="top", fill="x", pady=(0, 4))
         ttk.Label(topic_search, text="🔍").pack(side="left")
         self.topic_search_var = tk.StringVar()
@@ -334,7 +427,7 @@ class PDFSherpaApp(ttk.Frame):
                    command=lambda: self.topic_search_var.set("")
                    ).pack(side="left")
 
-        topic_wrap = ttk.Frame(mid)
+        topic_wrap = ttk.Frame(topics)
         topic_wrap.pack(side="top", fill="both", expand=True)
         self.topic_tree = ttk.Treeview(topic_wrap, columns=("page",),
                                        show="tree headings",
@@ -349,6 +442,13 @@ class PDFSherpaApp(ttk.Frame):
         topic_sb.pack(side="right", fill="y")
         self.topic_tree.config(yscrollcommand=topic_sb.set)
         self.topic_tree.bind("<<TreeviewSelect>>", self.on_topic_selected)
+
+        # Right-click context menu for rows in the bookmark list
+        self.bookmark_menu = tk.Menu(self, tearoff=0)
+        self.bookmark_menu.add_command(label="Rename",
+                                       command=self._rename_bookmark)
+        self.bookmark_menu.add_command(label="Delete",
+                                       command=self._delete_bookmark)
         self._mid_pane = mid
         panes.add(mid, weight=1)
 
@@ -406,6 +506,13 @@ class PDFSherpaApp(ttk.Frame):
         _add_tooltip(self.save_btn,
                      "Write highlights to disk (Ctrl+S): choose between an\n"
                      "annotated copy — name(ann).pdf — or the original file.")
+        bookmark_btn = ttk.Button(nav, text="🔖", width=3,
+                                  command=self.add_bookmark)
+        bookmark_btn.pack(side="left", padx=(4, 0))
+        _add_tooltip(bookmark_btn,
+                     "Bookmark the current page (Ctrl+B). Bookmarks appear\n"
+                     "in their own list above the Topics; right-click one\n"
+                     "there to rename or delete it.")
         ttk.Button(nav, text="−",
                    command=lambda: self.change_zoom(1 / ZOOM_STEP)
                    ).pack(side="right")
@@ -446,6 +553,9 @@ class PDFSherpaApp(ttk.Frame):
                                      command=self.highlight_selection)
         self.canvas_menu.add_command(label="Remove highlight",
                                      command=self._remove_highlight_here)
+        self.canvas_menu.add_separator()
+        self.canvas_menu.add_command(label="Bookmark this page",
+                                     command=self.add_bookmark)
         canvas_wrap.rowconfigure(0, weight=1)
         canvas_wrap.columnconfigure(0, weight=1)
         panes.add(right, weight=3)
@@ -511,6 +621,10 @@ class PDFSherpaApp(ttk.Frame):
         # Save highlight annotations.
         top.bind("<Control-s>",
                  lambda e: (self.save_annotations(), "break")[1])
+
+        # Bookmark the current page.  _viewer_key (not a bare bind): entries
+        # have a default emacs Control-b binding we must not shadow.
+        top.bind("<Control-b>", self._viewer_key(self.add_bookmark))
 
         # Content search: Ctrl+F focuses the box, F3 / Shift+F3 step matches.
         top.bind("<Control-f>",
@@ -944,6 +1058,8 @@ class PDFSherpaApp(ttk.Frame):
     def load_topics(self, pdf_path: str) -> None:
         self._topic_entries = []
         self._topic_placeholder = None
+        self._bookmarks = load_bookmarks(pdf_path)
+        self._populate_bookmark_tree()
         metadata_path = find_metadata_path(pdf_path)
         if metadata_path is None:
             self._topic_placeholder = "(no metadata file found)"
@@ -990,9 +1106,108 @@ class PDFSherpaApp(ttk.Frame):
         if count == 0 and needle:
             self.topic_tree.insert("", "end", text="(no matches)", values=("",))
 
+    def _populate_bookmark_tree(self) -> None:
+        """Fill the bookmark list and attach/detach its pane: while the PDF
+        has bookmarks it sits above the topics behind a draggable sash;
+        without any, Topics takes the full height."""
+        self.bm_tree.delete(*self.bm_tree.get_children())
+        for i, bm in enumerate(self._bookmarks):
+            # The list index rides in the iid so the right-click menu knows
+            # which bookmark it targets.
+            self.bm_tree.insert("", "end", iid=f"bm-{i}",
+                                text=bm["title"], values=(bm["page"],))
+        shown = str(self._bm_frame) in self._mid_split.panes()
+        if self._bookmarks and not shown:
+            self._mid_split.insert(0, self._bm_frame, weight=1)
+            self.after_idle(self._place_bm_sash)
+        elif not self._bookmarks and shown:
+            self._bm_sash = self._mid_split.sashpos(0)  # keep the dragged spot
+            self._mid_split.forget(self._bm_frame)
+
+    def _place_bm_sash(self) -> None:
+        """Put the bookmarks/topics sash where the user last dragged it, or
+        at 25% of the split's height the first time the pane appears."""
+        if str(self._bm_frame) not in self._mid_split.panes():
+            return
+        height = self._mid_split.winfo_height()
+        if height <= 1:                   # split not laid out yet; retry
+            self.after(50, self._place_bm_sash)
+            return
+        pos = self._bm_sash if self._bm_sash is not None else height // 4
+        self._mid_split.sashpos(0, max(40, min(pos, height - 80)))
+
     def _on_topic_search_changed(self, *_args) -> None:
         self.topic_filter_text = self.topic_search_var.get().strip()
         self._populate_topic_tree()
+
+    # -- Bookmarks -------------------------------------------------------------
+    def add_bookmark(self) -> None:
+        """Bookmark the current page under a user-chosen name."""
+        if self.doc is None or self.current_pdf_path is None:
+            return
+        page = self.current_page + 1
+        default = f"Page {page}"
+        title = simpledialog.askstring("Add bookmark", "Bookmark name:",
+                                       initialvalue=default, parent=self)
+        if title is None:               # cancelled
+            return
+        title = title.strip() or default
+        bookmark = {"page": page, "title": title}
+        self._bookmarks.append(bookmark)
+        self._bookmarks.sort(key=lambda b: b["page"])
+        save_bookmarks(self.current_pdf_path, self._bookmarks)
+        self._populate_bookmark_tree()
+        self._select_bookmark_row(self._bookmarks.index(bookmark))
+
+    def _select_bookmark_row(self, index: int) -> None:
+        """Highlight a bookmark's row so the user sees where it landed."""
+        iid = f"bm-{index}"
+        if self.bm_tree.exists(iid):
+            self.bm_tree.selection_set(iid)
+            self.bm_tree.see(iid)
+
+    def on_bookmark_selected(self, _event=None) -> None:
+        selection = self.bm_tree.selection()
+        if not selection:
+            return
+        values = self.bm_tree.item(selection[0], "values")
+        if not values or values[0] in ("", None):
+            return
+        try:
+            page = int(values[0])
+        except (ValueError, TypeError):
+            return
+        self.goto_page(page - 1)        # bookmark pages are 1-based
+
+    def _on_bm_right_click(self, event) -> None:
+        iid = self.bm_tree.identify_row(event.y)
+        if not iid.startswith("bm-"):
+            return
+        self._bm_menu_index = int(iid.split("-", 1)[1])
+        self.bm_tree.selection_set(iid)
+        self.bookmark_menu.tk_popup(event.x_root, event.y_root)
+
+    def _rename_bookmark(self) -> None:
+        i = self._bm_menu_index
+        if i is None or not 0 <= i < len(self._bookmarks):
+            return
+        title = simpledialog.askstring("Rename bookmark", "Bookmark name:",
+                                       initialvalue=self._bookmarks[i]["title"],
+                                       parent=self)
+        if title is None or not title.strip():
+            return
+        self._bookmarks[i]["title"] = title.strip()
+        save_bookmarks(self.current_pdf_path, self._bookmarks)
+        self._populate_bookmark_tree()
+        self._select_bookmark_row(i)
+
+    def _delete_bookmark(self) -> None:
+        i = self._bm_menu_index
+        if i is None or not 0 <= i < len(self._bookmarks):
+            return
+        del self._bookmarks[i]
+        save_bookmarks(self.current_pdf_path, self._bookmarks)
+        self._populate_bookmark_tree()
 
     # -- Content search (text of the open PDF) --------------------------------
     def _on_content_search_changed(self, *_args) -> None:
@@ -1285,6 +1500,15 @@ class PDFSherpaApp(ttk.Frame):
                         shutil.copyfile(meta, ann_meta)
                     except OSError:
                         pass              # copy still saved; just no topics
+            # ...and the same bookmarks sidecar, if any.
+            bm = bookmarks_path(src)
+            if os.path.isfile(bm):
+                ann_bm = bookmarks_path(ann_path)
+                if not os.path.exists(ann_bm):
+                    try:
+                        shutil.copyfile(bm, ann_bm)
+                    except OSError:
+                        pass              # copy still saved; just no bookmarks
             self.refresh_pdf_list()       # show the new (ann) file
         else:
             try:
