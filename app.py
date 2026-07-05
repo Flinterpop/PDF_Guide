@@ -13,6 +13,8 @@ A small desktop app that:
    of the current folder and auto-generate its .toc topics file.
 5. Bookmark pages (Ctrl+B) with your own names; bookmarks show in their own
    list above the Topics and are saved next to the PDF (name.bookmarks.json).
+6. Checks GitHub for a newer release at launch and can download and install
+   the update in place (opt out with "check_updates": false in config.json).
 
 Metadata file formats (auto-detected by extension, .toc preferred):
 
@@ -65,7 +67,7 @@ except ImportError:  # pragma: no cover
 
 
 # Shown in the window title; keep in sync with AppVersion in installer.iss.
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 
 # Where the launch-time update check looks for new releases.
 UPDATE_API_URL = ("https://api.github.com/repos/"

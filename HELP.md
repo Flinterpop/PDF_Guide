@@ -9,6 +9,7 @@ PDF Sherpa lets you browse a folder of PDFs **by topic** and read them in a buil
 ## The three panes
 
 - **PDFs** (left) — every PDF found under the current folder, grouped by subfolder. Click one to open it. The search box filters the list as you type.
+  Right-click a PDF for **Open PDF** (in your default viewer) or **Reveal in Explorer**; right-click a folder to open it in Explorer.
 - **Topics** (middle) — the selected PDF's topic list. Click a topic to jump straight to that page. The search box filters the topics as you type. If the
   PDF has bookmarks, they appear in their own list above the topics (see **Bookmarks** below).
 - **Viewer** (right) — the embedded page view, with a search box that finds text inside the open PDF (see **Searching** below).
