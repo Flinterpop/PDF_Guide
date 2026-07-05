@@ -1027,13 +1027,27 @@ class PDFSherpaApp(ttk.Frame):
                      f'start "" "{app_exe}"\r\n'
                      f'del /q "{setup_path}"\r\n'
                      f'del /q "%~f0"\r\n')
+        self._spawn_handoff_batch(batch_path)
+        self._on_close()
+
+    def _spawn_handoff_batch(self, batch_path: str) -> None:
+        """Run an update-handoff batch hidden and detached.
+
+        PyInstaller's runtime env vars (_PYI_*, _MEIPASS2) MUST be stripped:
+        inherited through cmd, they make the relaunched exe reuse THIS
+        process's _MEIxxxx extraction dir -- deleted the moment we exit --
+        and it dies with "Failed to load Python DLL" instead of extracting
+        its own.
+        """
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("_PYI_") and k != "_MEIPASS2"}
         subprocess.Popen(
             ["cmd", "/c", batch_path],
             creationflags=(subprocess.CREATE_NO_WINDOW
                            | subprocess.CREATE_NEW_PROCESS_GROUP),
             close_fds=True,
-            cwd=os.path.dirname(setup_path))
-        self._on_close()
+            env=env,
+            cwd=os.path.dirname(batch_path))
 
     def _swap_portable_and_exit(self, zip_path: str) -> None:
         """Portable self-update: replace this exe with the one from the
@@ -1071,12 +1085,7 @@ class PDFSherpaApp(ttk.Frame):
                      f'del /q "{zip_path}"\r\n'
                      f'del /q "{new_exe}"\r\n'
                      f'del /q "%~f0"\r\n')
-        subprocess.Popen(
-            ["cmd", "/c", batch_path],
-            creationflags=(subprocess.CREATE_NO_WINDOW
-                           | subprocess.CREATE_NEW_PROCESS_GROUP),
-            close_fds=True,
-            cwd=os.path.dirname(zip_path))
+        self._spawn_handoff_batch(batch_path)
         self._on_close()
 
     # -- PDF list -------------------------------------------------------------
