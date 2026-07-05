@@ -19,6 +19,10 @@ A small desktop app (Tkinter) that lets you browse PDFs by topic.
 - **Drag & drop** — drop a PDF anywhere on the window to file it into an
   `inbox` subfolder with an auto-generated topics file.
 
+## Screenshot
+<img width="1427" height="1209" alt="image" src="https://github.com/user-attachments/assets/63af4bb8-e27c-4956-ace1-ff0c47cd110b" />
+
+
 ## Install
 
 ```
