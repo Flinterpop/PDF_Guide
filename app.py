@@ -39,6 +39,7 @@ Run:           python app.py  [optional_folder]
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -86,6 +87,10 @@ METADATA_EXTENSIONS = (".toc", ".json")
 MIN_ZOOM = 0.25
 MAX_ZOOM = 4.0
 ZOOM_STEP = 1.25
+
+# How many PDFs' last-viewed page to remember (oldest entries are pruned
+# so config.json can't grow without bound).
+MAX_REMEMBERED_PAGES = 200
 
 
 def _add_tooltip(widget, text: str, delay_ms: int = 500) -> None:
@@ -208,7 +213,8 @@ def load_bookmarks(pdf_path: str) -> list[dict]:
                 bookmarks.append({"page": page, "title": title})
         bookmarks.sort(key=lambda b: b["page"])
         return bookmarks
-    except Exception as exc:  # corrupt/unreadable; next save overwrites it
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        # Corrupt or unreadable sidecar; the next save overwrites it.
         messagebox.showwarning(
             "Bookmarks",
             f"Could not read {os.path.basename(path)}:\n\n{exc}\n\n"
@@ -301,6 +307,20 @@ class PDFSherpaApp(ttk.Frame):
         # listed here.  Persisted across runs.
         saved = load_config().get("expanded_folders", [])
         self._expanded = set(saved) if isinstance(saved, list) else set()
+        # State owned by later flows, declared here so the object's full
+        # state is visible in one place.
+        self._pdf_by_iid: dict[str, str] = {}   # tree item id -> pdf path
+        self._folder_rel_by_iid: dict[str, str] = {}  # folder iid -> rel path
+        self._ctx_path: str | None = None       # PDF-list context-menu target
+        self._help_win: tk.Toplevel | None = None
+        self._dl_win: tk.Toplevel | None = None      # download progress window
+        self._update_thread: threading.Thread | None = None
+        self._update_result: tuple | None = None     # set by the worker thread
+        self._download_result: tuple | None = None   # set by the worker thread
+        # Win32 drag-drop plumbing (_enable_file_drop fills these in).
+        self._drop_queue: list[str] = []
+        self._wndproc_ref = None
+        self._orig_wndproc = None
 
         self.pack(fill="both", expand=True)
         self._build_ui()
@@ -314,7 +334,17 @@ class PDFSherpaApp(ttk.Frame):
 
     # -- Layout ---------------------------------------------------------------
     def _build_ui(self) -> None:
-        # Toolbar
+        """Assemble the toolbar and the three resizable panes
+        (PDFs | topics | viewer), each built by its own helper."""
+        self._build_toolbar()
+        panes = self.panes = ttk.PanedWindow(self, orient="horizontal")
+        panes.pack(fill="both", expand=True)
+        panes.add(self._build_pdf_pane(panes), weight=1)
+        panes.add(self._build_topics_pane(panes), weight=1)
+        panes.add(self._build_viewer_pane(panes), weight=3)
+        self._apply_pane_visibility(persist=False)   # restore saved toggles
+
+    def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self)
         toolbar.pack(side="top", fill="x", pady=(0, 6))
 
@@ -353,13 +383,9 @@ class PDFSherpaApp(ttk.Frame):
                      "Show or hide the Topics pane.\n"
                      "Hide both panes for a full-width reading view.")
 
-
-        # Three resizable panes: PDFs | topics | viewer
-        panes = self.panes = ttk.PanedWindow(self, orient="horizontal")
-        panes.pack(fill="both", expand=True)
-
-        # 1. PDF list (grouped by subfolder under the top-level folder)
-        left = ttk.Frame(panes)
+    def _build_pdf_pane(self, parent) -> ttk.Frame:
+        """PDF list pane (grouped by subfolder under the top-level folder)."""
+        left = ttk.Frame(parent)
         ttk.Label(left, text="PDFs").pack(anchor="w")
 
         # Search / filter box
@@ -398,38 +424,18 @@ class PDFSherpaApp(ttk.Frame):
                                   command=self._ctx_open)
         self.pdf_menu.add_command(label="Reveal in Explorer",
                                   command=self._ctx_reveal)
-        self._ctx_path: str | None = None
         self._left_pane = left
-        panes.add(left, weight=1)
+        return left
 
-        # 2. Topics
-        mid = ttk.Frame(panes)
+    def _build_topics_pane(self, parent) -> ttk.Frame:
+        """Topics pane; the bookmarks list rides above it behind a sash."""
+        mid = ttk.Frame(parent)
         # Vertical split: Bookmarks over Topics, with a draggable sash.  The
         # Bookmarks pane is only attached while the PDF has bookmarks (it
         # starts at 25% of the height); otherwise Topics takes it all.
         self._mid_split = ttk.PanedWindow(mid, orient="vertical")
         self._mid_split.pack(fill="both", expand=True)
-
-        self._bm_frame = ttk.Frame(self._mid_split)
-        # Not added to the split here -- _populate_bookmark_tree attaches and
-        # detaches it as bookmarks come and go.
-        ttk.Label(self._bm_frame, text="Bookmarks").pack(anchor="w")
-        bm_wrap = ttk.Frame(self._bm_frame)
-        bm_wrap.pack(side="top", fill="both", expand=True)
-        self.bm_tree = ttk.Treeview(bm_wrap, columns=("page",),
-                                    show="tree headings",
-                                    selectmode="browse", height=3)
-        self.bm_tree.heading("#0", text="Bookmark")
-        self.bm_tree.heading("page", text="Page")
-        self.bm_tree.column("#0", width=200, anchor="w")
-        self.bm_tree.column("page", width=50, anchor="center", stretch=False)
-        self.bm_tree.pack(side="left", fill="both", expand=True)
-        bm_sb = ttk.Scrollbar(bm_wrap, orient="vertical",
-                              command=self.bm_tree.yview)
-        bm_sb.pack(side="right", fill="y")
-        self.bm_tree.config(yscrollcommand=bm_sb.set)
-        self.bm_tree.bind("<<TreeviewSelect>>", self.on_bookmark_selected)
-        self.bm_tree.bind("<Button-3>", self._on_bm_right_click)
+        self._build_bookmarks_ui()
 
         topics = ttk.Frame(self._mid_split)
         self._mid_split.add(topics, weight=3)
@@ -464,20 +470,49 @@ class PDFSherpaApp(ttk.Frame):
         self.topic_tree.config(yscrollcommand=topic_sb.set)
         self.topic_tree.bind("<<TreeviewSelect>>", self.on_topic_selected)
 
+        self._mid_pane = mid
+        return mid
+
+    def _build_bookmarks_ui(self) -> None:
+        """Bookmark list widgets (shown above Topics while a PDF has any)."""
+        self._bm_frame = ttk.Frame(self._mid_split)
+        # Not added to the split here -- _populate_bookmark_tree attaches and
+        # detaches it as bookmarks come and go.
+        ttk.Label(self._bm_frame, text="Bookmarks").pack(anchor="w")
+        bm_wrap = ttk.Frame(self._bm_frame)
+        bm_wrap.pack(side="top", fill="both", expand=True)
+        self.bm_tree = ttk.Treeview(bm_wrap, columns=("page",),
+                                    show="tree headings",
+                                    selectmode="browse", height=3)
+        self.bm_tree.heading("#0", text="Bookmark")
+        self.bm_tree.heading("page", text="Page")
+        self.bm_tree.column("#0", width=200, anchor="w")
+        self.bm_tree.column("page", width=50, anchor="center", stretch=False)
+        self.bm_tree.pack(side="left", fill="both", expand=True)
+        bm_sb = ttk.Scrollbar(bm_wrap, orient="vertical",
+                              command=self.bm_tree.yview)
+        bm_sb.pack(side="right", fill="y")
+        self.bm_tree.config(yscrollcommand=bm_sb.set)
+        self.bm_tree.bind("<<TreeviewSelect>>", self.on_bookmark_selected)
+        self.bm_tree.bind("<Button-3>", self._on_bm_right_click)
         # Right-click context menu for rows in the bookmark list
         self.bookmark_menu = tk.Menu(self, tearoff=0)
         self.bookmark_menu.add_command(label="Rename",
                                        command=self._rename_bookmark)
         self.bookmark_menu.add_command(label="Delete",
                                        command=self._delete_bookmark)
-        self._mid_pane = mid
-        panes.add(mid, weight=1)
 
-        # 3. Embedded viewer
-        right = ttk.Frame(panes)
+    def _build_viewer_pane(self, parent) -> ttk.Frame:
+        """Embedded viewer: find bar, nav bar, and the page canvas."""
+        right = ttk.Frame(parent)
+        self._build_content_search_bar(right)
+        self._build_viewer_nav_bar(right)
+        self._build_viewer_canvas(right)
+        return right
 
-        # Search / find box (searches the text of the currently open PDF)
-        content_search = ttk.Frame(right)
+    def _build_content_search_bar(self, parent) -> None:
+        """Find box that searches the text of the currently open PDF."""
+        content_search = ttk.Frame(parent)
         content_search.pack(side="top", fill="x", pady=(0, 4))
         ttk.Label(content_search, text="🔍").pack(side="left")
         self.content_search_var = tk.StringVar()
@@ -505,7 +540,9 @@ class PDFSherpaApp(ttk.Frame):
                    command=lambda: self.content_search_var.set("")
                    ).pack(side="left")
 
-        nav = ttk.Frame(right)
+    def _build_viewer_nav_bar(self, parent) -> None:
+        """Paging, zoom/fit, highlight, save, and bookmark controls."""
+        nav = ttk.Frame(parent)
         nav.pack(side="top", fill="x")
         ttk.Button(nav, text="◀ Prev",
                    command=self.prev_page).pack(side="left")
@@ -550,7 +587,9 @@ class PDFSherpaApp(ttk.Frame):
         fit_btn.pack(side="right", padx=4)
         _add_tooltip(fit_btn, "Scale the page to the viewer width (W)")
 
-        canvas_wrap = ttk.Frame(right)
+    def _build_viewer_canvas(self, parent) -> None:
+        """Scrollable page canvas plus its right-click menu."""
+        canvas_wrap = ttk.Frame(parent)
         canvas_wrap.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(canvas_wrap, background="#3a3a3a",
                                 highlightthickness=0)
@@ -579,9 +618,6 @@ class PDFSherpaApp(ttk.Frame):
                                      command=self.add_bookmark)
         canvas_wrap.rowconfigure(0, weight=1)
         canvas_wrap.columnconfigure(0, weight=1)
-        panes.add(right, weight=3)
-
-        self._apply_pane_visibility(persist=False)   # restore saved toggles
 
     # -- Pane visibility -------------------------------------------------------
     def _apply_pane_visibility(self, persist: bool = True) -> None:
@@ -695,8 +731,6 @@ class PDFSherpaApp(ttk.Frame):
         import ctypes
         from ctypes import wintypes
 
-        self._drop_queue: list[str] = []
-
         user32 = ctypes.windll.user32
         shell32 = ctypes.windll.shell32
 
@@ -788,7 +822,8 @@ class PDFSherpaApp(ttk.Frame):
             if find_metadata_path(dest) is None:
                 try:
                     tocgen.write_toc(dest)
-                except Exception as exc:
+                except (OSError, RuntimeError, ValueError) as exc:
+                    # PyMuPDF signals bad/encrypted PDFs via RuntimeError.
                     failed.append(f"{name}: added, but no topics built ({exc})")
 
         if added:
@@ -810,7 +845,7 @@ class PDFSherpaApp(ttk.Frame):
     # -- Help -----------------------------------------------------------------
     def show_help(self) -> None:
         """Open a window that renders the bundled HELP.md."""
-        existing = getattr(self, "_help_win", None)
+        existing = self._help_win
         if existing is not None and existing.winfo_exists():
             existing.deiconify()
             existing.lift()
@@ -877,12 +912,11 @@ class PDFSherpaApp(ttk.Frame):
         """Kick off a release check.  Auto checks (launch) fail silently and
         honor the config opt-outs; manual checks (Help window) always run and
         always report an outcome."""
-        thread = getattr(self, "_update_thread", None)
-        if thread is not None and thread.is_alive():
+        if self._update_thread is not None and self._update_thread.is_alive():
             return
         if not manual and not load_config().get("check_updates", True):
             return
-        self._update_result: tuple | None = None
+        self._update_result = None
         self._update_thread = threading.Thread(target=self._update_worker,
                                                daemon=True)
         self._update_thread.start()
@@ -892,7 +926,8 @@ class PDFSherpaApp(ttk.Frame):
         """Thread body -- no Tk calls here (see _enable_file_drop's note)."""
         try:
             self._update_result = ("ok", _fetch_latest_release())
-        except Exception as exc:  # offline, rate limit, bad JSON, bad tag
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            # Offline, timeout, rate limit, bad JSON, or a bad release tag.
             self._update_result = ("error", str(exc))
 
     def _poll_update_result(self, manual: bool) -> None:
@@ -965,7 +1000,7 @@ class PDFSherpaApp(ttk.Frame):
         bar = ttk.Progressbar(win, mode="indeterminate", length=280)
         bar.pack(padx=16, pady=(0, 14))
         bar.start(12)
-        self._download_result: tuple | None = None
+        self._download_result = None
         threading.Thread(target=self._download_worker,
                          args=(url, dest), daemon=True).start()
         self.after(500, self._poll_download_result)
@@ -980,7 +1015,7 @@ class PDFSherpaApp(ttk.Frame):
                 shutil.copyfileobj(resp, out, 256 * 1024)
             os.replace(dest + ".part", dest)
             self._download_result = ("ok", dest)
-        except Exception as exc:
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             self._download_result = ("error", str(exc))
 
     def _poll_download_result(self) -> None:
@@ -989,7 +1024,7 @@ class PDFSherpaApp(ttk.Frame):
         if self._download_result is None:
             self.after(500, self._poll_download_result)
             return
-        if self._dl_win.winfo_exists():
+        if self._dl_win is not None and self._dl_win.winfo_exists():
             self._dl_win.destroy()
         status, payload = self._download_result
         if status == "error":
@@ -1102,8 +1137,8 @@ class PDFSherpaApp(ttk.Frame):
         self.winfo_toplevel().title(
             f"PDF Sherpa - V{APP_VERSION} - {os.path.abspath(self.folder)}")
         self.pdf_tree.delete(*self.pdf_tree.get_children())
-        self._pdf_by_iid: dict[str, str] = {}   # tree item id -> pdf path
-        self._folder_rel_by_iid: dict[str, str] = {}   # folder iid -> rel path
+        self._pdf_by_iid = {}
+        self._folder_rel_by_iid = {}
 
         if not os.path.isdir(self.folder):
             self.pdf_tree.insert("", "end", text="(folder not found)")
@@ -1204,7 +1239,8 @@ class PDFSherpaApp(ttk.Frame):
             try:
                 tocgen.write_toc(pdf)
                 made += 1
-            except Exception as exc:          # keep going on a bad PDF
+            except (OSError, RuntimeError, ValueError) as exc:
+                # Keep going on a bad PDF (PyMuPDF raises RuntimeError).
                 failed.append(f"{os.path.basename(pdf)}: {exc}")
 
         self.refresh_pdf_list()               # pick up the new .toc files
@@ -1326,7 +1362,8 @@ class PDFSherpaApp(ttk.Frame):
             return
         try:
             entries = load_metadata(metadata_path)
-        except Exception as exc:  # bad format, unreadable, etc.
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            # Unreadable file, bad JSON/toc syntax, or wrong entry shape.
             self._topic_placeholder = (
                 f"(error reading {os.path.basename(metadata_path)})")
             self._populate_topic_tree()
@@ -1383,14 +1420,17 @@ class PDFSherpaApp(ttk.Frame):
             self._bm_sash = self._mid_split.sashpos(0)  # keep the dragged spot
             self._mid_split.forget(self._bm_frame)
 
-    def _place_bm_sash(self) -> None:
+    def _place_bm_sash(self, retries: int = 20) -> None:
         """Put the bookmarks/topics sash where the user last dragged it, or
         at 25% of the split's height the first time the pane appears."""
         if str(self._bm_frame) not in self._mid_split.panes():
             return
         height = self._mid_split.winfo_height()
         if height <= 1:                   # split not laid out yet; retry
-            self.after(50, self._place_bm_sash)
+            # Bounded retry: give up (leaving Tk's default sash) rather
+            # than reschedule forever if the split never gets a size.
+            if retries > 0:
+                self.after(50, lambda: self._place_bm_sash(retries - 1))
             return
         pos = self._bm_sash if self._bm_sash is not None else height // 4
         self._mid_split.sashpos(0, max(40, min(pos, height - 80)))
@@ -1745,7 +1785,7 @@ class PDFSherpaApp(ttk.Frame):
         if save_copy:
             try:
                 self.doc.save(ann_path)   # full write to the new file
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 messagebox.showerror(
                     "Save failed",
                     f"Could not save\n{ann_path}:\n\n{exc}")
@@ -1772,7 +1812,7 @@ class PDFSherpaApp(ttk.Frame):
         else:
             try:
                 signed = (self.doc.get_sigflags() or 0) > 0
-            except Exception:
+            except (RuntimeError, ValueError):
                 signed = False
             if signed and not messagebox.askyesno(
                     "Signed PDF",
@@ -1781,7 +1821,7 @@ class PDFSherpaApp(ttk.Frame):
                 return
             try:
                 self.doc.saveIncr()       # append-only update, fast
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 messagebox.showerror(
                     "Save failed",
                     f"Could not save highlights to\n{src}:\n\n{exc}")
@@ -1835,7 +1875,7 @@ class PDFSherpaApp(ttk.Frame):
             if self.doc is not None:
                 self.doc.close()
             self.doc = fitz.open(pdf_path)
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             self.doc = None
             self._render_message(f"Could not open PDF:\n{exc}")
             return
@@ -1876,7 +1916,14 @@ class PDFSherpaApp(ttk.Frame):
         pages = cfg.get("last_pages", {})
         if not isinstance(pages, dict):
             pages = {}
-        pages[_page_key(pdf_path)] = page_index
+        # Dicts keep insertion order (and JSON round-trips it), so removing
+        # the key before re-adding keeps the map ordered oldest-first --
+        # letting the cap below prune the least recently viewed PDFs.
+        key = _page_key(pdf_path)
+        pages.pop(key, None)
+        pages[key] = page_index
+        while len(pages) > MAX_REMEMBERED_PAGES:
+            pages.pop(next(iter(pages)))
         update_config({"last_pages": pages})
 
     def prev_page(self) -> None:
