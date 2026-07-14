@@ -4,10 +4,10 @@ one-file exe, the installer, and the portable zip, commit and push the bump,
 publish a GitHub release with both assets, then reinstall locally.
 
 Usage:
-  .\release.ps1 1.3.7
-  .\release.ps1 1.3.7 -NotesFile notes.md      # release notes from a file
-  .\release.ps1 1.3.7 -Notes "- fixed X"       # inline release notes
-  .\release.ps1 1.3.7 -SkipInstall             # don't reinstall/relaunch here
+  .\release.ps1 1.3.8
+  .\release.ps1 1.3.8 -NotesFile notes.md      # release notes from a file
+  .\release.ps1 1.3.8 -Notes "- fixed X"       # inline release notes
+  .\release.ps1 1.3.8 -SkipInstall             # don't reinstall/relaunch here
 
 Without -Notes/-NotesFile the GitHub notes are auto-generated from commits.
 Requires: python (with PyInstaller), Inno Setup 6, gh (authenticated), git.

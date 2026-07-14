@@ -20,7 +20,8 @@ A small desktop app (Tkinter) that lets you browse PDFs by topic.
   highlight annotations, into the original or an `(ann)` copy.
 - **Bookmarks** — mark pages with your own names (`Ctrl+B`); they show in
   their own list above the Topics and are saved beside the PDF in
-  `name.bookmarks.json`.
+  `name.bookmarks.json`. PDFs that have bookmarks are shown in **blue** in the
+  list, so you can spot them at a glance.
 - **Drag & drop** — drop a PDF anywhere on the window to file it into an
   `inbox` subfolder with an auto-generated topics file.
 
@@ -74,8 +75,8 @@ To cut a full release in one step (bump versions, build everything, commit,
 push, publish the GitHub release, reinstall locally):
 
 ```
-.\release.ps1 1.3.7                     # notes auto-generated from commits
-.\release.ps1 1.3.7 -NotesFile notes.md # or hand-written notes
+.\release.ps1 1.3.8                     # notes auto-generated from commits
+.\release.ps1 1.3.8 -NotesFile notes.md # or hand-written notes
 ```
 
 Or do the steps by hand — build the one-file exe, then compile the installer
@@ -149,9 +150,12 @@ Page numbers are **1-based** (page 1 = the first page).
   position remembered across runs) — click to jump, right-click to rename or
   delete. They live in a `name.bookmarks.json` sidecar next to the PDF, so
   they travel with the folder and can be hand-edited; an `(ann)` copy gets the
-  sidecar copied along too.
-- **PDFs / Topics** toolbar toggles collapse the left and middle panes — hide
-  both for a full-width reading view. The choice persists across runs.
+  sidecar copied along too. PDFs that have bookmarks show their name in **blue**
+  in the PDF list (the colour updates live as you add the first bookmark or
+  delete the last one).
+- **PDFs / Topics and Bookmarks** toolbar toggles collapse the left and middle
+  panes — hide both for a full-width reading view. The choice persists across
+  runs.
 - **Full page** fits the whole page and resizes the window to hug it; dragging
   a window edge or corner then zooms the page to follow. Selecting a different
   PDF never moves the window.
