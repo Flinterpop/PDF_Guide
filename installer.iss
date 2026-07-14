@@ -5,7 +5,7 @@
 ; release.ps1 does the whole cycle -- see the README's build section.
 
 #define AppName "PDF Sherpa"
-#define AppVersion "1.3.10"
+#define AppVersion "1.3.11"
 #define AppExe "PDFSherpa.exe"
 
 [Setup]
