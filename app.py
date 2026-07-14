@@ -315,9 +315,14 @@ class PDFSherpaApp(ttk.Frame):
         # Favorite PDFs pinned above the search box (absolute paths, newest
         # first, capped at MAX_FAVORITES).  Persisted across runs.
         fav = load_config().get("favorites", [])
-        self._favorites: list[str] = (
-            [p for p in fav if isinstance(p, str)][:MAX_FAVORITES]
-            if isinstance(fav, list) else [])
+        # Canonicalise to the root-scoped stored form (migrates favorites
+        # saved as absolute paths by older versions to root-relative) and
+        # write the shallower form back so the saved file matches.
+        raw_fav = ([p for p in fav if isinstance(p, str) and p.strip()]
+                   if isinstance(fav, list) else [])
+        self._favorites: list[str] = self._dedup_favorites(raw_fav)[:MAX_FAVORITES]
+        if self._favorites != raw_fav[:MAX_FAVORITES]:
+            update_config({"favorites": self._favorites})
         self._fav_placeholder = False   # True while the list shows the hint row
         self._fav_ctx_path: str | None = None   # favorites context-menu target
         # State owned by later flows, declared here so the object's full
@@ -1188,6 +1193,7 @@ class PDFSherpaApp(ttk.Frame):
             self.folder = chosen
             update_config({"folder": os.path.abspath(chosen)})
             self.refresh_pdf_list()
+            self._refresh_favorites_list()   # re-scope relative favorites
 
     def refresh_pdf_list(self) -> None:
         self.winfo_toplevel().title(
@@ -1402,24 +1408,56 @@ class PDFSherpaApp(ttk.Frame):
             messagebox.showerror("Reveal in Explorer", str(exc))
 
     # -- Favorites ------------------------------------------------------------
+    # Favorites are stored relative to the current root folder when the file
+    # lives under it (absolute otherwise), so they follow the folder and are
+    # portable.  self._favorites holds these stored forms; they are resolved
+    # against the *current* root at open/display time, so switching folders
+    # re-scopes them.
+    def _fav_store_form(self, pdf_path: str) -> str:
+        """The favorite's saved form: relative to the root folder when the
+        file lives under it, else an absolute path."""
+        ap = os.path.abspath(pdf_path)
+        root = os.path.abspath(self.folder)
+        try:
+            rel = os.path.relpath(ap, root)
+        except ValueError:
+            return ap                           # different drive -> absolute
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            return ap                           # outside the root -> absolute
+        return rel
+
+    def _fav_abs_path(self, stored: str) -> str:
+        """Resolve a stored favorite to an absolute path against the current
+        root folder (relative forms join the root; absolute forms pass through)."""
+        if os.path.isabs(stored):
+            return os.path.normpath(stored)
+        return os.path.normpath(os.path.join(os.path.abspath(self.folder),
+                                             stored))
+
+    def _fav_key(self, stored: str) -> str:
+        """Identity key for dedup / membership: the resolved absolute path,
+        case-folded (so a relative and absolute form of one file match)."""
+        return os.path.normcase(self._fav_abs_path(stored))
+
     def _is_favorite(self, pdf_path: str) -> bool:
-        key = _page_key(pdf_path)
-        return any(_page_key(p) == key for p in self._favorites)
+        want = os.path.normcase(os.path.abspath(pdf_path))
+        return any(self._fav_key(f) == want for f in self._favorites)
 
     def _add_favorite(self, pdf_path: str) -> None:
         """Pin a PDF to the top of the favorites list (deduped, capped)."""
         if not pdf_path:
             return
-        key = _page_key(pdf_path)
-        self._favorites = [p for p in self._favorites if _page_key(p) != key]
-        self._favorites.insert(0, os.path.abspath(pdf_path))
+        want = os.path.normcase(os.path.abspath(pdf_path))
+        self._favorites = [f for f in self._favorites if self._fav_key(f) != want]
+        self._favorites.insert(0, self._fav_store_form(pdf_path))
         del self._favorites[MAX_FAVORITES:]     # drop the oldest over the cap
         update_config({"favorites": self._favorites})
         self._refresh_favorites_list()
 
     def _remove_favorite(self, pdf_path: str) -> None:
-        key = _page_key(pdf_path)
-        kept = [p for p in self._favorites if _page_key(p) != key]
+        """Remove the favorite matching pdf_path (an absolute path)."""
+        want = os.path.normcase(os.path.abspath(pdf_path))
+        kept = [f for f in self._favorites if self._fav_key(f) != want]
         if len(kept) == len(self._favorites):
             return                              # wasn't a favorite
         self._favorites = kept
@@ -1441,7 +1479,7 @@ class PDFSherpaApp(ttk.Frame):
         self._refresh_favorites_list()
 
     def _export_favorites(self) -> None:
-        """Write the favorites (absolute paths) to a JSON file the user picks."""
+        """Write the favorites (root-relative where possible) to a JSON file."""
         if not self._favorites:
             messagebox.showinfo("Export favorites",
                                  "You have no favorites to export.")
@@ -1515,24 +1553,26 @@ class PDFSherpaApp(ttk.Frame):
             return None
         return paths
 
-    @staticmethod
-    def _dedup_favorites(paths: list[str]) -> list[str]:
-        """Absolutise paths and drop later duplicates (case/path-insensitive),
-        preserving first-seen order."""
+    def _dedup_favorites(self, paths: list[str]) -> list[str]:
+        """Canonicalise each entry to the current root's stored form and drop
+        later duplicates (case/path-insensitive), preserving first-seen order.
+        Imported absolute paths under the root thus become root-relative."""
         seen: set[str] = set()
         out: list[str] = []
         for p in paths:
-            key = _page_key(p)
+            canon = self._fav_store_form(self._fav_abs_path(p))
+            key = self._fav_key(canon)
             if key in seen:
                 continue
             seen.add(key)
-            out.append(os.path.abspath(p))
+            out.append(canon)
         return out
 
     def _refresh_favorites_list(self) -> None:
-        """Redraw the favorites listbox, sizing it to its contents.  Missing
-        files show red; PDFs with saved bookmarks show blue (matching the
-        tree).  An empty list shows a single greyed hint row."""
+        """Redraw the favorites listbox, sizing it to its contents.  Each row
+        shows its path relative to the root (absolute when it lives elsewhere).
+        Missing files show red; PDFs with saved bookmarks show blue (matching
+        the tree).  An empty list shows a single greyed hint row."""
         lb = self.fav_list
         lb.delete(0, "end")
         self._fav_placeholder = not self._favorites
@@ -1541,11 +1581,12 @@ class PDFSherpaApp(ttk.Frame):
             lb.itemconfig(0, foreground="#999")
             lb.config(height=1)
             return
-        for i, path in enumerate(self._favorites):
-            lb.insert("end", " " + os.path.basename(path))
-            if not os.path.isfile(path):
+        for i, stored in enumerate(self._favorites):
+            abs_path = self._fav_abs_path(stored)
+            lb.insert("end", " " + stored)
+            if not os.path.isfile(abs_path):
                 lb.itemconfig(i, foreground="#c01c28")   # missing file
-            elif os.path.isfile(bookmarks_path(path)):
+            elif os.path.isfile(bookmarks_path(abs_path)):
                 lb.itemconfig(i, foreground="#1a5fb4")   # has bookmarks
         lb.config(height=min(MAX_FAVORITES, len(self._favorites)))
 
@@ -1563,7 +1604,7 @@ class PDFSherpaApp(ttk.Frame):
             return
         sel = self.fav_list.curselection()
         if sel and 0 <= sel[0] < len(self._favorites):
-            self._open_favorite(self._favorites[sel[0]])
+            self._open_favorite(self._fav_abs_path(self._favorites[sel[0]]))
 
     def _ctx_toggle_favorite(self) -> None:
         """PDF-list menu: add the target PDF to favorites, or remove it."""
@@ -1583,7 +1624,9 @@ class PDFSherpaApp(ttk.Frame):
             return
         self.fav_list.selection_clear(0, "end")
         self.fav_list.selection_set(idx)
-        self._fav_ctx_path = self._favorites[idx]
+        # Store the resolved absolute path so open / remove / reveal all work
+        # uniformly regardless of the stored (relative vs absolute) form.
+        self._fav_ctx_path = self._fav_abs_path(self._favorites[idx])
         self.fav_menu.tk_popup(event.x_root, event.y_root)
 
     def _fav_ctx_open(self) -> None:

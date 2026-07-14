@@ -203,7 +203,7 @@ is closed, or to delete for a fresh start.
 | `geometry` | Window size and position |
 | `last_pdf` | PDF re-opened on the next launch |
 | `last_pages` | Last-viewed page per PDF (200 most recent) |
-| `favorites` | Pinned PDFs shown above the search box (10 most recent) |
+| `favorites` | Pinned PDFs above the search box (10 max, stored relative to the folder root) |
 | `expanded_folders` | Subfolders left open in the PDF list |
 | `fit_pref` | Viewer fit preference: `"width"` or `"page"` |
 | `bm_sash` | Bookmarks/Topics divider position |
