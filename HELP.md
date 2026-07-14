@@ -11,7 +11,9 @@ PDF Sherpa lets you browse a folder of PDFs **by topic** and read them in a buil
 - **PDFs** (left) — every PDF found under the current folder, grouped by subfolder. Click one to open it. The search box filters the list as you type.
   Right-click a PDF for **Open PDF** (in your default viewer), **Reveal in Explorer**, or **Add to favorites**; right-click a folder to open it in Explorer.
   A **Favorites** list sits above the search box: up to 10 pinned PDFs (newest first) that you can open in one click from any folder. Right-click a
-  favorite to open it, reveal it, or remove it. Favorites are remembered across runs, and a favorite that also has bookmarks shows in blue.
+  favorite to open it, reveal it, or remove it. Favorites are remembered across runs, and a favorite that also has bookmarks shows in blue. The **⋯**
+  button beside the *Favorites* heading lets you **clear** the list, or **export** it to / **import** it from a JSON file (handy for moving your
+  favorites to another machine); importing can either merge with or replace your current list.
 - **Topics** (middle) — the selected PDF's topic list. Click a topic to jump straight to that page. The search box filters the topics as you type. If the
   PDF has bookmarks, they appear in their own list above the topics (see **Bookmarks** below).
 - **Viewer** (right) — the embedded page view, with a search box that finds text inside the open PDF (see **Searching** below).

@@ -402,8 +402,25 @@ class PDFSherpaApp(ttk.Frame):
         left = ttk.Frame(parent)
 
         # Favorites: up to MAX_FAVORITES pinned PDFs, above the search box.
-        # Right-click a PDF in the list below to add or remove one.
-        ttk.Label(left, text="Favorites").pack(anchor="w")
+        # Right-click a PDF in the list below to add or remove one.  The "⋯"
+        # button carries the list-level actions (clear / export / import),
+        # which stay reachable even when the list is empty.
+        fav_header = ttk.Frame(left)
+        fav_header.pack(side="top", fill="x")
+        ttk.Label(fav_header, text="Favorites").pack(side="left")
+        fav_mb = ttk.Menubutton(fav_header, text="⋯", width=2)
+        fav_mb.pack(side="right")
+        fav_manage = tk.Menu(fav_mb, tearoff=0)
+        fav_manage.add_command(label="Export favorites…",
+                               command=self._export_favorites)
+        fav_manage.add_command(label="Import favorites…",
+                               command=self._import_favorites)
+        fav_manage.add_separator()
+        fav_manage.add_command(label="Clear all favorites",
+                               command=self._clear_favorites)
+        fav_mb.config(menu=fav_manage)
+        _add_tooltip(fav_mb, "Clear, export, or import your favorites.")
+
         fav_wrap = ttk.Frame(left)
         fav_wrap.pack(side="top", fill="x", pady=(0, 6))
         self.fav_list = tk.Listbox(fav_wrap, height=1, activestyle="none",
@@ -1408,6 +1425,109 @@ class PDFSherpaApp(ttk.Frame):
         self._favorites = kept
         update_config({"favorites": self._favorites})
         self._refresh_favorites_list()
+
+    def _clear_favorites(self) -> None:
+        """Empty the favorites list (after a confirmation)."""
+        n = len(self._favorites)
+        if n == 0:
+            messagebox.showinfo("Clear favorites", "You have no favorites.")
+            return
+        if not messagebox.askyesno(
+                "Clear favorites",
+                f"Remove all {n} favorite{'s' if n != 1 else ''}?"):
+            return
+        self._favorites = []
+        update_config({"favorites": self._favorites})
+        self._refresh_favorites_list()
+
+    def _export_favorites(self) -> None:
+        """Write the favorites (absolute paths) to a JSON file the user picks."""
+        if not self._favorites:
+            messagebox.showinfo("Export favorites",
+                                 "You have no favorites to export.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export favorites", defaultextension=".json",
+            initialfile="pdf-sherpa-favorites.json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return                              # user cancelled
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"favorites": self._favorites}, fh, indent=2)
+        except OSError as exc:
+            messagebox.showerror("Export favorites",
+                                 f"Could not write file:\n{exc}")
+            return
+        messagebox.showinfo(
+            "Export favorites",
+            f"Exported {len(self._favorites)} favorite(s) to:\n{path}")
+
+    def _import_favorites(self) -> None:
+        """Load favorites from a JSON file, merging with or replacing the
+        current list (deduped, capped at MAX_FAVORITES)."""
+        path = filedialog.askopenfilename(
+            title="Import favorites",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return                              # user cancelled
+        imported = self._read_favorites_file(path)
+        if imported is None:
+            return                              # already reported to the user
+        merge = True
+        if self._favorites:
+            ans = messagebox.askyesnocancel(
+                "Import favorites",
+                "Merge with your current favorites?\n\n"
+                "Yes  -  add the imported PDFs to your current list\n"
+                "No   -  replace your current favorites")
+            if ans is None:
+                return                          # Cancel
+            merge = ans
+        combined = (self._favorites + imported) if merge else imported
+        self._favorites = self._dedup_favorites(combined)[:MAX_FAVORITES]
+        update_config({"favorites": self._favorites})
+        self._refresh_favorites_list()
+        messagebox.showinfo(
+            "Import favorites",
+            f"Your favorites list now has {len(self._favorites)} item(s).")
+
+    def _read_favorites_file(self, path: str) -> list[str] | None:
+        """Parse a favorites export file into a list of path strings, or show
+        an error and return None.  Accepts either {"favorites": [...]} or a
+        bare list of paths."""
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Import favorites",
+                                 f"Could not read file:\n{exc}")
+            return None
+        raw = data.get("favorites") if isinstance(data, dict) else data
+        if not isinstance(raw, list):
+            messagebox.showerror("Import favorites",
+                                 "That file doesn't contain a favorites list.")
+            return None
+        paths = [p for p in raw if isinstance(p, str) and p.strip()]
+        if not paths:
+            messagebox.showinfo("Import favorites",
+                                "No favorites were found in that file.")
+            return None
+        return paths
+
+    @staticmethod
+    def _dedup_favorites(paths: list[str]) -> list[str]:
+        """Absolutise paths and drop later duplicates (case/path-insensitive),
+        preserving first-seen order."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for p in paths:
+            key = _page_key(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(os.path.abspath(p))
+        return out
 
     def _refresh_favorites_list(self) -> None:
         """Redraw the favorites listbox, sizing it to its contents.  Missing
