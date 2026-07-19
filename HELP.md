@@ -9,7 +9,7 @@ PDF Sherpa lets you browse a folder of PDFs **by topic** and read them in a buil
 ## The three panes
 
 - **PDFs** (left) — every PDF found under the current folder, grouped by subfolder. Click one to open it. The search box filters the list as you type.
-  Right-click a PDF for **Open PDF** (in your default viewer), **Reveal in Explorer**, or **Add to favorites**; right-click a folder to open it in Explorer.
+  Right-click a PDF for **Open PDF** (in your default viewer), **Show in file manager** (labelled *Reveal in Explorer* on Windows / *Reveal in Finder* on macOS), or **Add to favorites**; right-click a folder to open it in your file manager.
   A **Favorites** list sits above the search box: up to 10 pinned PDFs (newest first) that you can open in one click. Each row shows the PDF's path
   relative to the current folder, and favorites are stored that way — so they follow the folder if you move or rename it, and re-point when you switch
   to a different root folder (PDFs outside the current folder are kept as absolute paths). Right-click a
@@ -25,8 +25,11 @@ choice is remembered across runs, and hidden panes keep their state (selection, 
 
 ## Adding PDFs
 
-**Drag and drop** one or more PDF files anywhere onto the window. Each is copied into an `inbox` subfolder of the current folder, a topics file is
+**Drag and drop** one or more PDF files anywhere onto the window (Windows only). Each is copied into an `inbox` subfolder of the current folder, a topics file is
 generated automatically, and the last one is selected and opened for you.
+
+On Linux and macOS, drag-and-drop isn't available — instead copy the PDFs into your folder (or an `inbox` subfolder) directly, or point Sherpa at their
+folder with **Choose folder…**, then press **Refresh** (`F5`) to build any missing topics files.
 
 ## Topic (.toc) files
 
@@ -118,15 +121,19 @@ Arrow, space, and page keys defer to the PDF and topic lists while one of them h
 
 ## Updates
 
-A couple of seconds after launch, Sherpa quietly checks GitHub for a newer release (it never interrupts you when you're up to date or offline). When
-one is found you get three choices: **Yes** downloads the update and applies it in place — the app restarts on the new version by itself; **No** skips
-that version for good (you'll be asked again for the next one); **Cancel** just reminds you on the next launch. This works for both the installed
-copy (it re-runs the installer silently) and the portable copy (it swaps the exe where it sits, even on a USB stick).
+On **Windows**, a couple of seconds after launch Sherpa quietly checks GitHub for a newer release (it never interrupts you when you're up to date or
+offline). When one is found you get three choices: **Yes** downloads the update and applies it in place — the app restarts on the new version by itself;
+**No** skips that version for good (you'll be asked again for the next one); **Cancel** just reminds you on the next launch. This works for both the
+installed copy (it re-runs the installer silently) and the portable copy (it swaps the exe where it sits, even on a USB stick).
 
 You can also check on demand with the **Check for updates** button at the bottom of this Help window — it always answers, including "You're up to
 date", and still offers a version you previously skipped.
 
-To turn the launch check off entirely, add `"check_updates": false` to `%APPDATA%\PDFGuide\config.json`.
+On **Linux and macOS** there's no automatic update: to upgrade, download the newest AppImage from the releases page, or `git pull` if you run from
+source. The **Check for updates** button still tells you whether a newer release exists and opens the releases page.
+
+To turn the Windows launch check off entirely, add `"check_updates": false` to your config file — `%APPDATA%\PDFGuide\config.json` on Windows,
+`~/.config/PDFGuide/config.json` on Linux/macOS.
 
 ## More
 

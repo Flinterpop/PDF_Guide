@@ -22,8 +22,9 @@ A small desktop app (Tkinter) that lets you browse PDFs by topic.
   their own list above the Topics and are saved beside the PDF in
   `name.bookmarks.json`. PDFs that have bookmarks are shown in **blue** in the
   list, so you can spot them at a glance.
-- **Drag & drop** — drop a PDF anywhere on the window to file it into an
-  `inbox` subfolder with an auto-generated topics file.
+- **Drag & drop** (Windows) — drop a PDF anywhere on the window to file it into
+  an `inbox` subfolder with an auto-generated topics file. On Linux/macOS, copy
+  PDFs into the folder and press Refresh instead.
 
 ## Screenshot
 <img width="1427" height="1209" alt="image" src="https://github.com/user-attachments/assets/63af4bb8-e27c-4956-ace1-ff0c47cd110b" />
@@ -81,9 +82,21 @@ chmod +x PDFSherpa-*-x86_64.AppImage
 ```
 
 It needs a 64-bit desktop with FUSE 3 (standard on Ubuntu 22.04+, Fedora,
-etc.) and a glibc at least as new as the build host's. To add it to your
-application menu, use your desktop's "AppImage" integration or move it
-somewhere on your `PATH`.
+etc.) and a glibc at least as new as the build host's.
+
+To add it to your application menu, from a clone of this repo run:
+
+```
+./install-linux.sh --appimage                 # auto-finds the AppImage in
+                                              #   ./dist or ~/Applications
+./install-linux.sh --appimage ~/Downloads/PDFSherpa-1.3.12-x86_64.AppImage
+```
+
+This copies the AppImage into `~/Applications/` (behind a version-independent
+`PDFSherpa.AppImage` symlink), installs the icon, and writes the `.desktop`
+entry; `./install-linux.sh --remove` takes it back out. Alternatively, open the
+AppImage once with [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)
+or AppImageLauncher, which also handle menu integration and updates.
 
 ## Running from source (Linux / macOS)
 
@@ -104,10 +117,11 @@ Python 3.9+ with Tkinter — Tkinter ships separately on many distros:
 - Arch: `sudo pacman -S tk`
 
 To add PDF Sherpa to your application menu (a per-user `.desktop` entry, no
-root needed):
+root needed) that launches this source checkout via `run.sh`:
 
 ```
-./install-linux.sh            # install / update the menu entry
+./install-linux.sh            # menu entry that runs from source
+./install-linux.sh --appimage # ...or one that runs the bundled AppImage
 ./install-linux.sh --remove   # remove it
 ```
 
