@@ -95,7 +95,7 @@ To add it to your application menu, from a clone of this repo run:
 ```
 ./install-linux.sh --appimage                 # auto-finds the AppImage in
                                               #   ./dist or ~/Applications
-./install-linux.sh --appimage ~/Downloads/PDFSherpa-1.3.12-x86_64.AppImage
+./install-linux.sh --appimage ~/Downloads/PDFSherpa-x86_64.AppImage
 ```
 
 This copies the AppImage into `~/Applications/` (behind a version-independent
@@ -136,20 +136,25 @@ Platform notes: **Open in default viewer** uses `xdg-open` (Linux) / `open`
 (macOS), and **Show in file manager** selects the file via the freedesktop
 FileManager1 D-Bus interface, falling back to opening its folder. Drag-and-drop
 from the file manager is Windows-only; use **Choose folder…** or drop files
-into the folder directly. The launch-time update check targets the Windows
-release only, so on Linux/macOS just `git pull` to update.
+into the folder directly. A source run doesn't self-update — `git pull` to
+upgrade — but the **AppImage build updates itself** (see below).
 
 ## Building the AppImage (Linux)
 
-To produce the bundled `PDFSherpa-<version>-x86_64.AppImage` yourself:
+To produce the bundled `PDFSherpa-x86_64.AppImage` yourself:
 
 ```
-./build-appimage.sh        # -> dist/PDFSherpa-<version>-x86_64.AppImage
+./build-appimage.sh        # -> dist/PDFSherpa-x86_64.AppImage (+ .zsync)
 ```
 
 It freezes the app with PyInstaller (pulling in Tcl/Tk, PyMuPDF and Pillow),
 assembles an AppDir, and packs it with `appimagetool` using the statically
-linked type2 runtime (so the result runs on FUSE-3-only systems). Build
+linked type2 runtime (so the result runs on FUSE-3-only systems). It also
+embeds AppImage update information and writes a companion `.zsync`, so the
+built AppImage self-updates from the GitHub `latest` release (and
+AppImageUpdate / appimaged can update it too). The output name is
+**version-less** on purpose so `latest` always carries that exact asset —
+upload both `PDFSherpa-x86_64.AppImage` and its `.zsync` to the release. Build
 tooling and downloads are cached under `build/`; both `build/` and `dist/`
 stay out of git. Build on the oldest glibc you want to support — the AppImage
 requires a glibc at least as new as the build host's.

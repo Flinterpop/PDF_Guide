@@ -121,18 +121,19 @@ Arrow, space, and page keys defer to the PDF and topic lists while one of them h
 
 ## Updates
 
-On **Windows**, a couple of seconds after launch Sherpa quietly checks GitHub for a newer release (it never interrupts you when you're up to date or
+A couple of seconds after launch Sherpa quietly checks GitHub for a newer release (it never interrupts you when you're up to date or
 offline). When one is found you get three choices: **Yes** downloads the update and applies it in place — the app restarts on the new version by itself;
-**No** skips that version for good (you'll be asked again for the next one); **Cancel** just reminds you on the next launch. This works for both the
-installed copy (it re-runs the installer silently) and the portable copy (it swaps the exe where it sits, even on a USB stick).
+**No** skips that version for good (you'll be asked again for the next one); **Cancel** just reminds you on the next launch. On **Windows** this works for both the
+installed copy (it re-runs the installer silently) and the portable copy (it swaps the exe where it sits, even on a USB stick). The **Linux AppImage**
+downloads the new AppImage, replaces its own file in place, and relaunches.
 
 You can also check on demand with the **Check for updates** button at the bottom of this Help window — it always answers, including "You're up to
 date", and still offers a version you previously skipped.
 
-On **Linux and macOS** there's no automatic update: to upgrade, download the newest AppImage from the releases page, or `git pull` if you run from
-source. The **Check for updates** button still tells you whether a newer release exists and opens the releases page.
+Running **from source** (or on **macOS**) there's nothing to self-replace, so the automatic check is off there — to upgrade, `git pull`, or download the
+newest AppImage from the releases page. The **Check for updates** button still tells you whether a newer release exists.
 
-To turn the Windows launch check off entirely, add `"check_updates": false` to your config file — `%APPDATA%\PDFGuide\config.json` on Windows,
+To turn the launch check off entirely, add `"check_updates": false` to your config file — `%APPDATA%\PDFGuide\config.json` on Windows,
 `~/.config/PDFGuide/config.json` on Linux/macOS.
 
 ## More
