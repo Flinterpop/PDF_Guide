@@ -1,7 +1,7 @@
 # PDF Sherpa
 
 [![GitHub repo](https://img.shields.io/badge/GitHub-Flinterpop%2FPDF__Sherpa-181717?logo=github)](https://github.com/Flinterpop/PDF_Sherpa)
-![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![GUI](https://img.shields.io/badge/GUI-Tkinter-FFD43B)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -241,8 +241,9 @@ Page numbers are **1-based** (page 1 = the first page).
 - The **title bar** shows the app version and the current folder; the **Help**
   button opens the rendered user guide, and hovering the less obvious buttons
   shows a tooltip.
-- **Right-click** a PDF for **Open PDF** / **Reveal in Explorer**; right-click a
-  folder to open it in Explorer.
+- **Right-click** a PDF for **Open PDF** / **Show in file manager** (*Reveal in
+  Explorer* on Windows, *Reveal in Finder* on macOS); right-click a folder to
+  open it in your file manager.
 - The app remembers the **last page you were on in each PDF** and returns there
   when you reopen it (positions are kept for the 200 most recently viewed
   PDFs, so the settings file never grows without bound).
@@ -252,16 +253,18 @@ Page numbers are **1-based** (page 1 = the first page).
   each PDF's built-in outline bookmarks — or its text headings when there are
   none. (These built-in bookmarks are separate from your own `Ctrl+B`
   bookmarks.)
-- **Drop PDFs onto the window** (from Explorer, Outlook attachments saved to
-  disk, etc.) and they are **copied into an `inbox` subfolder** of the current
-  folder, a **`.toc` topics file is auto-generated** for each (bookmarks first,
-  text headings as a fallback), and the last one dropped is selected and
-  opened. Dropping a PDF whose name is already in the inbox asks before
-  replacing it, and an existing (hand-edited) `.toc` is never overwritten.
+- **Drop PDFs onto the window** (Windows only — from Explorer, Outlook
+  attachments saved to disk, etc.) and they are **copied into an `inbox`
+  subfolder** of the current folder, a **`.toc` topics file is auto-generated**
+  for each (bookmarks first, text headings as a fallback), and the last one
+  dropped is selected and opened. Dropping a PDF whose name is already in the
+  inbox asks before replacing it, and an existing (hand-edited) `.toc` is never
+  overwritten. On Linux/macOS, copy PDFs into the folder and press **Refresh**
+  to get the same auto-generated topics.
 - Viewer controls: **Prev/Next**, **+/−** zoom, **Fit width**, **Full page**,
   and mouse-wheel scrolling. Your **Fit width / Full page** choice is remembered
   and re-applied to every PDF you open — and it persists across app runs
-  (saved to `%APPDATA%\PDFGuide\config.json`). Manual **+/−** zoom is a temporary
+  (saved to the config file). Manual **+/−** zoom is a temporary
   override that doesn't change the saved preference.
 - The app also remembers your **window size/position**, the **folder you
   chose**, the **bookmarks divider position**, and **re-opens the last PDF**
@@ -271,10 +274,11 @@ Page numbers are **1-based** (page 1 = the first page).
 
 ## Settings file
 
-Everything the app remembers lives in one JSON file:
-`%APPDATA%\PDFGuide\config.json` (the folder keeps the app's former name so
-settings saved before the rename survive). It is safe to edit while the app
-is closed, or to delete for a fresh start.
+Everything the app remembers lives in one JSON file —
+`%APPDATA%\PDFGuide\config.json` on Windows, `~/.config/PDFGuide/config.json`
+on Linux/macOS (the folder keeps the app's former name so settings saved
+before the rename survive). It is safe to edit while the app is closed, or to
+delete for a fresh start.
 
 | Key | Meaning |
 |-----|---------|
