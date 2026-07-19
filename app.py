@@ -97,6 +97,15 @@ MAX_REMEMBERED_PAGES = 200
 # the oldest is dropped once this many are pinned).
 MAX_FAVORITES = 10
 
+# Label for the "show this file in the OS file manager" action -- the file
+# manager differs per platform, so name it accordingly.
+if sys.platform == "win32":
+    REVEAL_LABEL = "Reveal in Explorer"
+elif sys.platform == "darwin":
+    REVEAL_LABEL = "Reveal in Finder"
+else:
+    REVEAL_LABEL = "Show in file manager"
+
 
 def _add_tooltip(widget, text: str, delay_ms: int = 500) -> None:
     """Attach a hover tooltip to a widget (Tk has none built in).  Works on
@@ -348,8 +357,12 @@ class PDFSherpaApp(ttk.Frame):
         self.refresh_pdf_list()
         self._restore_session()
         # Check for a newer release once the window has settled.  Opt out
-        # with "check_updates": false in config.json.
-        self.after(2000, self._start_update_check)
+        # with "check_updates": false in config.json.  Only auto-checks on
+        # Windows -- the published release is a Windows installer, so nagging
+        # Linux/macOS users about it is pointless (the Help window's manual
+        # "Check for updates" button still works everywhere).
+        if sys.platform == "win32":
+            self.after(2000, self._start_update_check)
 
     # -- Layout ---------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -438,7 +451,7 @@ class PDFSherpaApp(ttk.Frame):
         self.fav_menu.add_command(label="Open PDF", command=self._fav_ctx_open)
         self.fav_menu.add_command(label="Remove from favorites",
                                   command=self._fav_ctx_remove)
-        self.fav_menu.add_command(label="Reveal in Explorer",
+        self.fav_menu.add_command(label=REVEAL_LABEL,
                                   command=self._fav_ctx_reveal)
 
         ttk.Label(left, text="PDFs").pack(anchor="w")
@@ -479,7 +492,7 @@ class PDFSherpaApp(ttk.Frame):
         self.pdf_menu = tk.Menu(self, tearoff=0)
         self.pdf_menu.add_command(label="Open in default viewer",
                                   command=self._ctx_open)
-        self.pdf_menu.add_command(label="Reveal in Explorer",
+        self.pdf_menu.add_command(label=REVEAL_LABEL,
                                   command=self._ctx_reveal)
         self.pdf_menu.add_separator()
         self.pdf_menu.add_command(label="Add to favorites",
@@ -931,12 +944,7 @@ class PDFSherpaApp(ttk.Frame):
         x = max(0, min(x, win.winfo_screenwidth() - w))
         y = max(0, min(y, win.winfo_screenheight() - h))
         win.geometry(f"{w}x{h}+{x}+{y}")
-        icon = _resource_path("sherpaicon.ico")
-        if os.path.isfile(icon):
-            try:
-                win.iconbitmap(icon)
-            except tk.TclError:
-                pass
+        _apply_window_icon(win)
 
         # Version + update check live at the bottom of the Help window
         # (packed first so the bar keeps its space when the window shrinks).
@@ -1390,8 +1398,8 @@ class PDFSherpaApp(ttk.Frame):
     def _ctx_open(self) -> None:
         if self._ctx_path and os.path.exists(self._ctx_path):
             try:
-                os.startfile(self._ctx_path)      # Windows default handler
-            except OSError as exc:
+                _open_path(self._ctx_path)        # OS default handler
+            except (OSError, subprocess.SubprocessError) as exc:
                 messagebox.showerror("Open", str(exc))
 
     def _ctx_reveal(self) -> None:
@@ -1399,13 +1407,9 @@ class PDFSherpaApp(ttk.Frame):
         if not path or not os.path.exists(path):
             return
         try:
-            if os.path.isdir(path):
-                os.startfile(path)                # open the folder itself
-            else:
-                # explorer's /select wants the path as one quoted token.
-                subprocess.run(f'explorer /select,"{os.path.normpath(path)}"')
-        except OSError as exc:
-            messagebox.showerror("Reveal in Explorer", str(exc))
+            _reveal_path(path)
+        except (OSError, subprocess.SubprocessError) as exc:
+            messagebox.showerror(REVEAL_LABEL, str(exc))
 
     # -- Favorites ------------------------------------------------------------
     # Favorites are stored relative to the current root folder when the file
@@ -2617,12 +2621,63 @@ def _page_key(pdf_path: str) -> str:
     return os.path.normcase(os.path.abspath(pdf_path))
 
 
+def _open_path(path: str) -> None:
+    """Open `path` (a file or folder) with the OS default handler.
+
+    Cross-platform replacement for os.startfile, which exists only on Windows.
+    Raises OSError on failure so callers can report it."""
+    if sys.platform == "win32":
+        os.startfile(path)  # type: ignore[attr-defined]  # Windows only
+    elif sys.platform == "darwin":
+        subprocess.run(["open", path], check=True)
+    else:
+        subprocess.run(["xdg-open", path], check=True)
+
+
+def _reveal_path(path: str) -> None:
+    """Show `path` in the OS file manager, selected if possible.
+
+    Raises OSError on failure so callers can report it."""
+    if sys.platform == "win32":
+        if os.path.isdir(path):
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            # explorer's /select wants the path as one quoted token.
+            subprocess.run(f'explorer /select,"{os.path.normpath(path)}"')
+        return
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-R", path], check=True)
+        return
+    # Linux/BSD: the freedesktop FileManager1 D-Bus interface selects the item
+    # in Nautilus/Dolphin/Nemo/etc.  Fall back to opening the folder when no
+    # such file manager is running (or dbus-send is missing).
+    uri = "file://" + urllib.request.pathname2url(os.path.abspath(path))
+    try:
+        subprocess.run(
+            ["dbus-send", "--session", "--print-reply",
+             "--dest=org.freedesktop.FileManager1", "--type=method_call",
+             "/org/freedesktop/FileManager1",
+             "org.freedesktop.FileManager1.ShowItems",
+             f"array:string:{uri}", "string:"],
+            check=True, capture_output=True, timeout=5)
+        return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    target = path if os.path.isdir(path) else os.path.dirname(path)
+    subprocess.run(["xdg-open", target], check=True)
+
+
 def _config_path() -> str:
     """Per-user settings file (persists across runs, incl. the frozen exe).
 
     The folder stays "PDFGuide" (the app's former name) so settings saved
     before the rename to PDF Sherpa keep working."""
-    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    else:
+        # Follow the XDG base-dir spec on Linux/macOS (~/.config by default).
+        base = (os.environ.get("XDG_CONFIG_HOME")
+                or os.path.join(os.path.expanduser("~"), ".config"))
     return os.path.join(base, "PDFGuide", "config.json")
 
 
@@ -2656,6 +2711,31 @@ def _resource_path(name: str) -> str:
     """Locate a bundled resource, whether running from source or frozen."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
+
+
+def _apply_window_icon(win) -> None:
+    """Give a window a title-bar/taskbar icon on any platform.
+
+    Windows uses the .ico via iconbitmap; everywhere else Tk ignores .ico, so
+    fall back to the PNG via iconphoto (needs Pillow).  Never fatal."""
+    if sys.platform == "win32":
+        ico = _resource_path("sherpaicon.ico")
+        if os.path.isfile(ico):
+            try:
+                win.iconbitmap(ico)
+                return
+            except tk.TclError:
+                pass
+    png = _resource_path("sherpapdf.png")
+    if Image is not None and ImageTk is not None and os.path.isfile(png):
+        try:
+            img = Image.open(png)
+            img.thumbnail((256, 256))
+            photo = ImageTk.PhotoImage(img)
+            win.iconphoto(True, photo)
+            win._icon_photo = photo  # keep a reference so Tk doesn't GC it
+        except Exception:
+            pass
 
 
 def _running_portable() -> bool:
@@ -2748,12 +2828,7 @@ def main() -> None:
     root.title(f"PDF Sherpa - V{APP_VERSION}")
     root.geometry("1100x720")
 
-    icon = _resource_path("sherpaicon.ico")
-    if os.path.isfile(icon):
-        try:
-            root.iconbitmap(icon)
-        except tk.TclError:
-            pass  # non-Windows or unreadable icon -- not fatal
+    _apply_window_icon(root)
 
     if fitz is None or Image is None:
         messagebox.showwarning(
