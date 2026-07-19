@@ -80,6 +80,11 @@ UPDATE_ASSET_NAME = "PDFSherpa-Setup.exe"
 # The no-install variant: a zip holding just PDFSherpa.exe.  A portable copy
 # updates itself from this asset instead of running the installer.
 UPDATE_PORTABLE_ASSET_NAME = "PDFSherpa-Portable.zip"
+# The Linux build.  A running AppImage self-updates from this asset by
+# replacing its own file in place (see MainWindow._swap_appimage_and_exit).
+# The name is version-less so the release "latest" always carries this exact
+# asset (and its .zsync) for the updater to match.
+UPDATE_APPIMAGE_ASSET_NAME = "PDFSherpa-x86_64.AppImage"
 
 # Metadata extensions we look for, in order of preference.
 METADATA_EXTENSIONS = (".toc", ".json")
@@ -345,6 +350,8 @@ class PDFSherpaApp(ttk.Frame):
         self._update_thread: threading.Thread | None = None
         self._update_result: tuple | None = None     # set by the worker thread
         self._download_result: tuple | None = None   # set by the worker thread
+        self._dl_appimage = False                    # AppImage self-update run
+        self._appimage_target: str | None = None     # the .AppImage to replace
         # Win32 drag-drop plumbing (_enable_file_drop fills these in).
         self._drop_queue: list[str] = []
         self._wndproc_ref = None
@@ -357,11 +364,11 @@ class PDFSherpaApp(ttk.Frame):
         self.refresh_pdf_list()
         self._restore_session()
         # Check for a newer release once the window has settled.  Opt out
-        # with "check_updates": false in config.json.  Only auto-checks on
-        # Windows -- the published release is a Windows installer, so nagging
-        # Linux/macOS users about it is pointless (the Help window's manual
-        # "Check for updates" button still works everywhere).
-        if sys.platform == "win32":
+        # with "check_updates": false in config.json.  Auto-checks where the
+        # app can install the update itself: Windows (installer/portable) and
+        # a Linux AppImage (self-replace).  A plain source/macOS run can't, so
+        # only its Help-window "Check for updates" button reaches the check.
+        if sys.platform == "win32" or _running_appimage():
             self.after(2000, self._start_update_check)
 
     # -- Layout ---------------------------------------------------------------
@@ -1038,6 +1045,14 @@ class PDFSherpaApp(ttk.Frame):
         if not choice:
             update_config({"skip_version": info["version_str"]})
             return
+        appimage = _running_appimage()
+        if appimage:
+            url = info.get("appimage_url")
+            if url:
+                self._begin_appimage_download(info, url, appimage)
+            else:
+                webbrowser.open(info["html_url"])
+            return
         portable = _running_portable()
         url = info["portable_url"] if portable else info["asset_url"]
         if getattr(sys, "frozen", False) and url:
@@ -1047,10 +1062,65 @@ class PDFSherpaApp(ttk.Frame):
             # a dev checkout -- just open the releases page.
             webbrowser.open(info["html_url"])
 
+    def _begin_appimage_download(self, info: dict, url: str,
+                                 current_path: str) -> None:
+        """Download the new AppImage beside the running one, then swap it in.
+
+        The download lands in the target's own directory so the final swap is
+        an atomic same-filesystem rename onto a fresh inode -- the running
+        (mounted) AppImage keeps its old inode until this process exits."""
+        self._dl_appimage = True
+        self._dl_portable = False
+        # Resolve symlinks (the --appimage install mode launches via one) so
+        # we replace the real file and leave the symlink pointing at it.
+        self._appimage_target = os.path.realpath(current_path)
+        dest = os.path.join(
+            os.path.dirname(self._appimage_target),
+            f".PDFSherpa-update-{info['version_str']}.AppImage")
+        win = tk.Toplevel(self)
+        self._dl_win = win
+        win.title("Updating PDF Sherpa")
+        win.resizable(False, False)
+        top = self.winfo_toplevel()
+        win.geometry(f"+{top.winfo_rootx() + 80}+{top.winfo_rooty() + 80}")
+        ttk.Label(win, text="Downloading update… PDF Sherpa will "
+                            "restart when it's ready.",
+                  padding=(16, 12)).pack()
+        bar = ttk.Progressbar(win, mode="indeterminate", length=280)
+        bar.pack(padx=16, pady=(0, 14))
+        bar.start(12)
+        self._download_result = None
+        threading.Thread(target=self._download_worker,
+                         args=(url, dest), daemon=True).start()
+        self.after(500, self._poll_download_result)
+
+    def _swap_appimage_and_exit(self, new_path: str) -> None:
+        """Install the downloaded AppImage over the running one and relaunch."""
+        target = self._appimage_target
+        if not target:
+            return
+        try:
+            os.chmod(new_path, 0o755)
+            os.replace(new_path, target)         # atomic, same filesystem
+        except OSError as exc:
+            try:
+                os.remove(new_path)
+            except OSError:
+                pass
+            messagebox.showerror(
+                "Update failed",
+                f"Could not install the update:\n{exc}\n\n"
+                "You can download it manually from the releases page on "
+                "GitHub.")
+            return
+        subprocess.Popen([target], start_new_session=True)
+        self._on_close()
+
     def _begin_download(self, info: dict, url: str, portable: bool) -> None:
         """Download the installer (or portable zip) in the background with a
         small progress window; the app stays usable underneath."""
         self._dl_portable = portable
+        self._dl_appimage = False
         if portable:
             dest = os.path.join(tempfile.gettempdir(),
                                 f"PDFSherpa-Portable-{info['version_str']}.zip")
@@ -1104,7 +1174,9 @@ class PDFSherpaApp(ttk.Frame):
                 "You can download the update manually from the releases "
                 "page on GitHub.")
             return
-        if self._dl_portable:
+        if self._dl_appimage:
+            self._swap_appimage_and_exit(payload)
+        elif self._dl_portable:
             self._swap_portable_and_exit(payload)
         else:
             self._launch_installer_and_exit(payload)
@@ -2757,6 +2829,16 @@ def _running_portable() -> bool:
                    for n in names)
 
 
+def _running_appimage() -> str | None:
+    """Path to the running AppImage, or None when not launched from one.
+
+    The AppImage runtime exports ``APPIMAGE`` (the outer .AppImage path) to the
+    program it launches; its presence is how we know an in-place self-update is
+    possible on Linux."""
+    path = os.environ.get("APPIMAGE")
+    return path if path and os.path.isfile(path) else None
+
+
 def _parse_version(text: str) -> tuple[int, ...] | None:
     """'v1.3.3' / '1.3.3' -> (1, 3, 3); None if malformed (e.g. a beta tag)."""
     try:
@@ -2785,6 +2867,7 @@ def _fetch_latest_release() -> dict:
         raise ValueError(f"unrecognized release tag: {tag!r}")
     asset_url = None
     portable_url = None
+    appimage_url = None
     fallback_exe = None
     for asset in data.get("assets", []):
         name = str(asset.get("name", ""))
@@ -2793,12 +2876,15 @@ def _fetch_latest_release() -> dict:
             asset_url = url
         elif name == UPDATE_PORTABLE_ASSET_NAME:
             portable_url = url
+        elif name == UPDATE_APPIMAGE_ASSET_NAME:
+            appimage_url = url
         elif fallback_exe is None and name.endswith(".exe"):
             fallback_exe = url
     return {"version": version,
             "version_str": tag.lstrip("vV"),
             "asset_url": asset_url or fallback_exe,
             "portable_url": portable_url,
+            "appimage_url": appimage_url,
             "html_url": data.get(
                 "html_url",
                 "https://github.com/Flinterpop/PDF_Sherpa/releases/latest")}

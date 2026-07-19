@@ -8,6 +8,9 @@ __pycache__/
 # PyInstaller / build outputs
 build/
 dist/
+# AppImage build artifacts (belong in dist/; ignore stray ones too)
+*.AppImage
+*.AppImage.zsync
 # Compiled installer -- published as a GitHub Release asset, not committed
 installer/
 
