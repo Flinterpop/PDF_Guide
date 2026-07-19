@@ -89,7 +89,7 @@ PY
 if [[ "$MODE" == "appimage" ]]; then
     # Locate the AppImage: explicit path, else newest in dist/, else ~/Applications.
     if [[ -z "$APPIMAGE_PATH" ]]; then
-        APPIMAGE_PATH="$(ls -t "$HERE"/dist/PDFSherpa-*-*.AppImage \
+        APPIMAGE_PATH="$(ls -t "$HERE"/dist/PDFSherpa-*.AppImage \
                                 "$APPIMAGE_HOME"/PDFSherpa-*.AppImage 2>/dev/null \
                          | head -1 || true)"
     fi

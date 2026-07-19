@@ -72,17 +72,23 @@ check, add `"check_updates": false` to `%APPDATA%\PDFGuide\config.json`.
 
 ## Installing (Linux)
 
-The easiest way — grab the **`PDFSherpa-<version>-x86_64.AppImage`** from the
+The easiest way — grab the **`PDFSherpa-x86_64.AppImage`** from the
 [latest release](https://github.com/Flinterpop/PDF_Sherpa/releases/latest).
 It bundles Python, Tcl/Tk, PyMuPDF and Pillow, so there's nothing to install:
 
 ```
-chmod +x PDFSherpa-*-x86_64.AppImage
-./PDFSherpa-*-x86_64.AppImage
+chmod +x PDFSherpa-x86_64.AppImage
+./PDFSherpa-x86_64.AppImage
 ```
 
 It needs a 64-bit desktop with FUSE 3 (standard on Ubuntu 22.04+, Fedora,
 etc.) and a glibc at least as new as the build host's.
+
+The AppImage **updates itself**: on launch it checks the releases and, when a
+newer version is available, offers to download it and replace the running
+AppImage in place, then relaunch. Update information is embedded and a
+companion `.zsync` is published, so external tools (AppImageUpdate, appimaged)
+can update it too.
 
 To add it to your application menu, from a clone of this repo run:
 

@@ -106,12 +106,32 @@ if [[ ! -x "$RUNTIME" ]]; then
 fi
 
 # 5. Pack it.  --appimage-extract-and-run avoids needing FUSE for the tool.
-OUT="$DIST/PDFSherpa-$VERSION-$ARCH.AppImage"
-rm -f "$OUT"
+#    -u embeds AppImage update information so the app (and AppImageUpdate /
+#    appimaged) can self-update from the GitHub "latest" release.  The output
+#    name is version-less on purpose: "latest" then always carries this exact
+#    asset (and its .zsync) for the updater to match across releases.
+OUT="$DIST/PDFSherpa-$ARCH.AppImage"
+UPDATE_INFO="gh-releases-zsync|Flinterpop|PDF_Sherpa|latest|PDFSherpa-*$ARCH.AppImage.zsync"
+rm -f "$OUT" "$OUT.zsync"
 ARCH="$ARCH" "$TOOL" --appimage-extract-and-run --runtime-file "$RUNTIME" \
-    "$APPDIR" "$OUT" >/dev/null
+    -u "$UPDATE_INFO" "$APPDIR" "$OUT" >/dev/null
 chmod +x "$OUT"
+
+# appimagetool emits the .zsync itself when zsyncmake is reachable; generate it
+# explicitly (with the copy bundled inside appimagetool) as a deterministic
+# fallback so the build always produces one.
+if [[ ! -f "$OUT.zsync" ]]; then
+    ( cd "$BUILD" && rm -rf zsroot \
+        && APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --appimage-extract \
+             'usr/bin/zsyncmake' >/dev/null 2>&1 \
+        && mv squashfs-root zsroot ) || true
+    ZS="$BUILD/zsroot/usr/bin/zsyncmake"
+    [[ -x "$ZS" ]] && "$ZS" -u "$(basename "$OUT")" -o "$OUT.zsync" "$OUT" \
+        >/dev/null 2>&1 || true
+fi
 
 echo
 echo "Done: $OUT"
 ls -lh "$OUT"
+[[ -f "$OUT.zsync" ]] && echo "zsync: $OUT.zsync" \
+    || echo "warning: no .zsync (install zsync for AppImageUpdate delta updates)"
